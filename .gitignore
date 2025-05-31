@@ -1,3 +1,10 @@
 .DS_Store
+__pycache__/
 Homework/1/assets/audio/reverse
 Homework/1/assets/audio/random
+Homework/2/assets/audio/train/LibriSpeech/train-clean-100/*
+Homework/2/assets/audio/test/LibriSpeech_1/test-clean/*
+Homework/2/assets/audio/test/LibriSpeech_2/test-other/*
+Homework/2/assets/audio/eval
+Homework/2/model
+Homework/2/plots
