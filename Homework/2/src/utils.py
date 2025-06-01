@@ -8,8 +8,8 @@ and evaluation utilities.
 import os
 import torch
 import torchaudio
-import torchaudio.transforms as T
-import torch.nn.functional as F
+import torchaudio.transforms as trans
+import torch.nn.functional as func
 import numpy as np
 from scipy.io import wavfile as scipy_wavfile
 import json
@@ -84,14 +84,14 @@ def load_audio_segment(
 
     # Resample if necessary
     if sr != target_sr:
-        resampler = T.Resample(sr, target_sr, dtype=waveform.dtype)
+        resampler = trans.Resample(sr, target_sr, dtype=waveform.dtype)
         waveform = resampler(waveform)
 
     # Pad or truncate to ensure fixed length
     current_samples = waveform.shape[-1]
     if current_samples < duration_samples:
         padding = duration_samples - current_samples
-        waveform = F.pad(waveform, (0, padding))  # Pad at the end
+        waveform = func.pad(waveform, (0, padding))  # Pad at the end
     elif current_samples > duration_samples:
         waveform = waveform[..., :duration_samples]  # Truncate from the end
 

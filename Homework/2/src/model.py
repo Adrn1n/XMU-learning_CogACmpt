@@ -18,7 +18,7 @@ Classes:
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.nn.functional as func
 
 # Import config from the same directory
 import config
@@ -33,20 +33,20 @@ class Encoder(nn.Module):
     1D convolution followed by ReLU activation.
 
     Args:
-        L (int): Kernel size for encoder convolution
-        N (int): Number of encoder filters (output channels)
+        l (int): Kernel size for encoder convolution
+        n (int): Number of encoder filters (output channels)
     """
 
-    def __init__(self, L=config.L_CONV_KERNEL_SIZE, N=config.N_ENCODER_FILTERS):
+    def __init__(self, l=config.L_CONV_KERNEL_SIZE, n=config.N_ENCODER_FILTERS):
         super(Encoder, self).__init__()
         self.conv1d_U = nn.Conv1d(
-            1, N, kernel_size=L, stride=L // 2, padding=0, bias=False
+            1, n, kernel_size=l, stride=l // 2, padding=0, bias=False
         )
         self.relu = nn.ReLU()
 
     def forward(self, mixture):  # mixture: (batch, 1, T_samples)
         """Forward pass through encoder."""
-        mixture_w = self.relu(self.conv1d_U(mixture))  # (batch, N, T_frames)
+        mixture_w = self.relu(self.conv1d_U(mixture))  # (batch, n, T_frames)
         return mixture_w
 
 
@@ -58,26 +58,26 @@ class Decoder(nn.Module):
     using transposed convolution with proper length matching.
 
     Args:
-        N (int): Number of input channels (encoder filters)
-        L (int): Kernel size for decoder convolution
+        n (int): Number of input channels (encoder filters)
+        l (int): Kernel size for decoder convolution
     """
 
-    def __init__(self, N=config.N_ENCODER_FILTERS, L=config.L_CONV_KERNEL_SIZE):
+    def __init__(self, n=config.N_ENCODER_FILTERS, l=config.L_CONV_KERNEL_SIZE):
         super(Decoder, self).__init__()
-        self.N = N
-        self.L = L
+        self.N = n
+        self.L = l
         self.conv_transpose1d_V = nn.ConvTranspose1d(
-            N, 1, kernel_size=L, stride=L // 2, bias=False
+            n, 1, kernel_size=l, stride=l // 2, bias=False
         )
 
     def forward(
         self, source_w_masked, original_mixture_len
-    ):  # source_w_masked: (batch, N, T_frames)
+    ):  # source_w_masked: (batch, n, T_frames)
         """
         Forward pass through decoder with length matching.
 
         Args:
-            source_w_masked: Encoded and masked source representation (batch, N, T_frames)
+            source_w_masked: Encoded and masked source representation (batch, n, T_frames)
             original_mixture_len: Target length for output signal
 
         Returns:
@@ -91,7 +91,7 @@ class Decoder(nn.Module):
             est_source = est_source[..., :original_mixture_len]
         elif est_source.shape[-1] < original_mixture_len:
             padding_needed = original_mixture_len - est_source.shape[-1]
-            est_source = F.pad(est_source, (0, padding_needed))
+            est_source = func.pad(est_source, (0, padding_needed))
 
         return est_source  # (batch_size*n_sources, 1, T_samples)
 
@@ -197,60 +197,60 @@ class TemporalConvNetBlock(nn.Module):
     normalization types (Global LayerNorm, Cumulative LayerNorm, BatchNorm).
 
     Args:
-        B (int): Number of bottleneck channels (input/output channels)
-        H (int): Number of hidden channels in the block
-        P (int): Kernel size for depthwise convolution
-        Sc (int): Number of skip connection channels (0 to disable)
+        b (int): Number of bottleneck channels (input/output channels)
+        h (int): Number of hidden channels in the block
+        p (int): Kernel size for depthwise convolution
+        sc (int): Number of skip connection channels (0 to disable)
         norm_type (str): Type of normalization ('gLN', 'cLN', or 'BN')
         causal (bool): Whether to use causal convolution (for online processing)
 
     Shape:
-        - Input: (batch_size, B, time_frames)
-        - Output: (batch_size, B, time_frames), Optional skip: (batch_size, Sc, time_frames)
+        - Input: (batch_size, b, time_frames)
+        - Output: (batch_size, b, time_frames), Optional skip: (batch_size, sc, time_frames)
     """
 
     def __init__(
         self,
-        B=config.B_TCN_CHANNELS,
-        H=config.H_TCN_CHANNELS,
-        P=config.P_TCN_KERNEL_SIZE,
-        Sc=config.Sc_TCN_CHANNELS,
+        b=config.B_TCN_CHANNELS,
+        h=config.H_TCN_CHANNELS,
+        p=config.P_TCN_KERNEL_SIZE,
+        sc=config.Sc_TCN_CHANNELS,
         norm_type=config.NORM_TYPE,
         causal=config.CAUSAL_CONV,
     ):
         super(TemporalConvNetBlock, self).__init__()
 
         # 1x1 convolution for channel expansion
-        self.conv1x1_1 = nn.Conv1d(B, H, 1)
+        self.conv1x1_1 = nn.Conv1d(b, h, 1)
         self.prelu1 = nn.PReLU()
 
         # Choose normalization type
         if norm_type == "gLN":
-            self.norm1 = GlobalLayerNorm(H)
+            self.norm1 = GlobalLayerNorm(h)
         elif norm_type == "cLN":
-            self.norm1 = CumulativeLayerNorm(H)
+            self.norm1 = CumulativeLayerNorm(h)
         else:  # BN
-            self.norm1 = nn.BatchNorm1d(H)
+            self.norm1 = nn.BatchNorm1d(h)
 
         # Depthwise separable convolution (padding handled in forward pass)
-        self.depthwise_conv = nn.Conv1d(H, H, kernel_size=P, padding=0, groups=H)
+        self.depthwise_conv = nn.Conv1d(h, h, kernel_size=p, padding=0, groups=h)
         self.prelu2 = nn.PReLU()
 
         # Second normalization layer
         if norm_type == "gLN":
-            self.norm2 = GlobalLayerNorm(H)
+            self.norm2 = GlobalLayerNorm(h)
         elif norm_type == "cLN":
-            self.norm2 = CumulativeLayerNorm(H)
+            self.norm2 = CumulativeLayerNorm(h)
         else:  # BN
-            self.norm2 = nn.BatchNorm1d(H)
+            self.norm2 = nn.BatchNorm1d(h)
 
         # 1x1 convolution for channel compression (bottleneck)
-        self.conv1x1_2 = nn.Conv1d(H, B, 1)
+        self.conv1x1_2 = nn.Conv1d(h, b, 1)
         self.causal = causal
 
         # Optional skip connection
-        if Sc > 0:
-            self.skip_conv1x1 = nn.Conv1d(H, Sc, 1)
+        if sc > 0:
+            self.skip_conv1x1 = nn.Conv1d(h, sc, 1)
             self.has_skip = True
         else:
             self.has_skip = False
@@ -267,12 +267,12 @@ class TemporalConvNetBlock(nn.Module):
         5. Optional skip connection output
 
         Args:
-            x: Input tensor of shape (batch, B, T_frames)
+            x: Input tensor of shape (batch, b, T_frames)
 
         Returns:
             tuple: (output, skip_output)
-                - output: Processed tensor with residual connection (batch, B, T_frames)
-                - skip_output: Skip connection tensor (batch, Sc, T_frames) or None
+                - output: Processed tensor with residual connection (batch, b, T_frames)
+                - skip_output: Skip connection tensor (batch, sc, T_frames) or None
         """
         # Store input for residual connection
         residual = x
@@ -283,18 +283,18 @@ class TemporalConvNetBlock(nn.Module):
         out = self.norm1(out)
 
         # Calculate padding for depthwise convolution to maintain temporal dimension
-        kernel_size_P = self.depthwise_conv.kernel_size[0]
+        kernel_size_p = self.depthwise_conv.kernel_size[0]
         if self.causal:
             # Causal padding: Only pad on the left (past) to prevent future information leakage
-            pad_left = kernel_size_P - 1
+            pad_left = kernel_size_p - 1
             pad_right = 0
         else:
             # Non-causal "same" padding: Distribute padding symmetrically
-            pad_left = (kernel_size_P - 1) // 2
-            pad_right = (kernel_size_P - 1) - pad_left
+            pad_left = (kernel_size_p - 1) // 2
+            pad_right = (kernel_size_p - 1) - pad_left
 
         # Apply padding and depthwise convolution
-        out = F.pad(out, (pad_left, pad_right))
+        out = func.pad(out, (pad_left, pad_right))
         out = self.depthwise_conv(out)
         out = self.prelu2(out)
         out = self.norm2(out)
@@ -324,56 +324,56 @@ class TemporalConvNet(nn.Module):
     4. Final mask generation for each source
 
     The TCN uses dilated convolutions to capture long-range temporal dependencies
-    efficiently. Each repeat contains X blocks, and dilation increases exponentially
-    within each repeat (1, 2, 4, ..., 2^(X-1)).
+    efficiently. Each repeat contains x blocks, and dilation increases exponentially
+    within each repeat (1, 2, 4, ..., 2^(x-1)).
 
     Args:
-        N (int): Number of encoder filters (input feature dimension)
-        B (int): Number of bottleneck channels in TCN blocks
-        H (int): Number of hidden channels in TCN blocks
-        P (int): Kernel size for depthwise convolution
-        X (int): Number of TCN blocks per repeat
-        R (int): Number of repeats (each with X blocks)
-        C (int): Number of sources to separate
-        Sc (int): Number of skip connection channels
+        n (int): Number of encoder filters (input feature dimension)
+        b (int): Number of bottleneck channels in TCN blocks
+        h (int): Number of hidden channels in TCN blocks
+        p (int): Kernel size for depthwise convolution
+        x (int): Number of TCN blocks per repeat
+        r (int): Number of repeats (each with x blocks)
+        c (int): Number of sources to separate
+        sc (int): Number of skip connection channels
         norm_type (str): Type of normalization ('gLN', 'cLN', or 'BN')
         causal (bool): Whether to use causal convolution
 
     Shape:
-        - Input: (batch_size, N, time_frames) - Encoded mixture representation
-        - Output: (batch_size, C, N, time_frames) - Separation masks for each source
+        - Input: (batch_size, n, time_frames) - Encoded mixture representation
+        - Output: (batch_size, c, n, time_frames) - Separation masks for each source
     """
 
     def __init__(
         self,
-        N=config.N_ENCODER_FILTERS,
-        B=config.B_TCN_CHANNELS,
-        H=config.H_TCN_CHANNELS,
-        P=config.P_TCN_KERNEL_SIZE,
-        X=config.X_TCN_BLOCKS,
-        R=config.R_TCN_REPEATS,
-        C=config.N_SOURCES,
-        Sc=config.Sc_TCN_CHANNELS,
+        n=config.N_ENCODER_FILTERS,
+        b=config.B_TCN_CHANNELS,
+        h=config.H_TCN_CHANNELS,
+        p=config.P_TCN_KERNEL_SIZE,
+        x=config.X_TCN_BLOCKS,
+        r=config.R_TCN_REPEATS,
+        c=config.N_SOURCES,
+        sc=config.Sc_TCN_CHANNELS,
         norm_type=config.NORM_TYPE,
         causal=config.CAUSAL_CONV,
     ):
         super(TemporalConvNet, self).__init__()
-        self.N = N
-        self.C = C
-        self.Sc = Sc
+        self.N = n
+        self.C = c
+        self.Sc = sc
 
-        self.layer_norm = nn.LayerNorm(N)
-        self.bottleneck_conv1x1 = nn.Conv1d(N, B, 1)
+        self.layer_norm = nn.LayerNorm(n)
+        self.bottleneck_conv1x1 = nn.Conv1d(n, b, 1)
 
         self.repeats = nn.ModuleList()
-        for _ in range(R):
+        for _ in range(r):
             blocks = nn.ModuleList()
-            for _ in range(X):
-                blocks.append(TemporalConvNetBlock(B, H, P, Sc, norm_type, causal))
+            for _ in range(x):
+                blocks.append(TemporalConvNetBlock(b, h, p, sc, norm_type, causal))
             self.repeats.append(blocks)
 
         self.prelu_out = nn.PReLU()
-        self.mask_conv1x1 = nn.Conv1d(Sc if Sc > 0 else B, C * N, 1)
+        self.mask_conv1x1 = nn.Conv1d(sc if sc > 0 else b, c * n, 1)
 
     def forward(self, mixture_w):
         """
@@ -385,14 +385,14 @@ class TemporalConvNet(nn.Module):
         and applies sigmoid activation to ensure masks are in [0,1] range.
 
         Args:
-            mixture_w: Encoded mixture representation (batch_size, N, T_frames)
+            mixture_w: Encoded mixture representation (batch_size, n, t_frames)
 
         Returns:
-            masks: Separation masks for each source (batch_size, C, N, T_frames)
+            masks: Separation masks for each source (batch_size, c, n, t_frames)
                    Values in [0,1] range indicating how much each time-frequency
                    bin belongs to each source.
         """
-        batch_size, N, T_frames = mixture_w.shape
+        batch_size, n, t_frames = mixture_w.shape
 
         # Apply layer normalization and bottleneck convolution
         out = self.layer_norm(mixture_w.transpose(1, 2)).transpose(1, 2)
@@ -402,18 +402,19 @@ class TemporalConvNet(nn.Module):
         skip_connection_sum = None
         if self.Sc > 0:
             skip_connection_sum = torch.zeros(
-                (batch_size, self.Sc, T_frames), device=mixture_w.device
+                (batch_size, self.Sc, t_frames), device=mixture_w.device
             )
 
         # Process through all TCN repeats and blocks
-        for r_idx in range(len(self.repeats)):
-            for block_idx in range(len(self.repeats[r_idx])):
-                residual_out, skip_out = self.repeats[r_idx][block_idx](out)
-                out = residual_out
-                # Accumulate skip connections for multi-scale feature aggregation
-                if skip_out is not None and skip_connection_sum is not None:
+        for repeat_module in self.repeats:
+            residual_out, skip_out = repeat_module(out)
+            out = residual_out
+            # Accumulate skip connections for multi-scale feature aggregation
+            if skip_out is not None:
+                if skip_connection_sum is None:
+                    skip_connection_sum = skip_out
+                else:
                     skip_connection_sum = skip_connection_sum + skip_out
-
         # Use skip connections if available, otherwise use final block output
         if skip_connection_sum is not None:
             processed_output = skip_connection_sum
@@ -423,7 +424,7 @@ class TemporalConvNet(nn.Module):
         # Generate final separation masks
         processed_output = self.prelu_out(processed_output)
         masks = self.mask_conv1x1(processed_output)
-        masks = masks.view(batch_size, self.C, N, T_frames)
+        masks = masks.view(batch_size, self.C, n, t_frames)
         masks = torch.sigmoid(masks)  # Ensure masks are in [0,1] range
 
         return masks
@@ -455,49 +456,49 @@ class ConvTasNet(nn.Module):
     - Flexible normalization options (Global LayerNorm, Cumulative LayerNorm, BatchNorm)
 
     Args:
-        N (int): Number of encoder filters (basis functions)
-        L (int): Length of encoder filters (kernel size)
-        B (int): Number of bottleneck channels in TCN
-        H (int): Number of hidden channels in TCN blocks
-        P (int): Kernel size for depthwise convolution in TCN
-        X (int): Number of TCN blocks per repeat
-        R (int): Number of repeats in TCN
-        C (int): Number of sources to separate
-        Sc (int): Number of skip connection channels
+        n (int): Number of encoder filters (basis functions)
+        l (int): Length of encoder filters (kernel size)
+        b (int): Number of bottleneck channels in TCN
+        h (int): Number of hidden channels in TCN blocks
+        p (int): Kernel size for depthwise convolution in TCN
+        x (int): Number of TCN blocks per repeat
+        r (int): Number of repeats in TCN
+        c (int): Number of sources to separate
+        sc (int): Number of skip connection channels
         norm_type (str): Normalization type ('gLN', 'cLN', or 'BN')
         causal (bool): Whether to use causal convolution for online processing
 
     Shape:
         - Input: (batch_size, 1, samples) - Single-channel mixture waveform
-        - Output: (batch_size, C, samples) - Separated source waveforms
+        - Output: (batch_size, c, samples) - Separated source waveforms
 
     Example:
-        >>> model = ConvTasNet(N=256, L=20, C=2)  # Separate 2 sources
+        >>> model = ConvTasNet(n=256, l=20, c=2)  # Separate 2 sources
         >>> mixture = torch.randn(4, 1, 32000)    # 4 mixtures, 2 seconds at 16kHz
         >>> sources = model(mixture)              # Shape: (4, 2, 32000)
     """
 
     def __init__(
         self,
-        N=config.N_ENCODER_FILTERS,
-        L=config.L_CONV_KERNEL_SIZE,
-        B=config.B_TCN_CHANNELS,
-        H=config.H_TCN_CHANNELS,
-        P=config.P_TCN_KERNEL_SIZE,
-        X=config.X_TCN_BLOCKS,
-        R=config.R_TCN_REPEATS,
-        C=config.N_SOURCES,
-        Sc=config.Sc_TCN_CHANNELS,
+        n=config.N_ENCODER_FILTERS,
+        l=config.L_CONV_KERNEL_SIZE,
+        b=config.B_TCN_CHANNELS,
+        h=config.H_TCN_CHANNELS,
+        p=config.P_TCN_KERNEL_SIZE,
+        x=config.X_TCN_BLOCKS,
+        r=config.R_TCN_REPEATS,
+        c=config.N_SOURCES,
+        sc=config.Sc_TCN_CHANNELS,
         norm_type=config.NORM_TYPE,
         causal=config.CAUSAL_CONV,
     ):
         super(ConvTasNet, self).__init__()
-        self.C = C
+        self.C = c
 
         # Initialize the three main components
-        self.encoder = Encoder(L, N)
-        self.separator = TemporalConvNet(N, B, H, P, X, R, C, Sc, norm_type, causal)
-        self.decoder = Decoder(N, L)
+        self.encoder = Encoder(l, n)
+        self.separator = TemporalConvNet(n, b, h, p, x, r, c, sc, norm_type, causal)
+        self.decoder = Decoder(n, l)
 
     def forward(self, mixture):
         """
@@ -518,13 +519,13 @@ class ConvTasNet(nn.Module):
                     Single-channel audio containing multiple overlapping sources
 
         Returns:
-            estimated_sources: Separated source waveforms (batch_size, C, samples)
+            estimated_sources: Separated source waveforms (batch_size, c, samples)
                               Each source is reconstructed to have the same length
                               as the original mixture input
 
         Processing Steps:
             1. mixture → encoder → mixture_w (encoded representation)
-            2. mixture_w → separator → masks (C separation masks)
+            2. mixture_w → separator → masks (c separation masks)
             3. mixture_w * mask_i → masked_w_i (for each source i)
             4. masked_w_i → decoder → estimated_source_i (for each source i)
             5. Stack all estimated sources into final output tensor

@@ -8,7 +8,7 @@ evaluation, and result visualization for the Conv-TasNet architecture.
 import random
 from tqdm import tqdm
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as func
 import torch.optim as optim
 import numpy as np
 import os
@@ -264,7 +264,7 @@ def train(
                     current_len = source_tensor.shape[-1]
                     if current_len < max_batch_len:
                         padding = max_batch_len - current_len
-                        source_tensor = F.pad(source_tensor, (0, padding))
+                        source_tensor = func.pad(source_tensor, (0, padding))
                     elif current_len > max_batch_len:
                         source_tensor = source_tensor[
                             ..., :max_batch_len
@@ -526,7 +526,7 @@ def evaluate(
                     current_len = source_tensor.shape[-1]
                     if current_len < max_batch_len:
                         padding = max_batch_len - current_len
-                        source_tensor = F.pad(source_tensor, (0, padding))
+                        source_tensor = func.pad(source_tensor, (0, padding))
                     elif current_len > max_batch_len:
                         source_tensor = source_tensor[..., :max_batch_len]
 
@@ -711,15 +711,15 @@ def main_run():
     # Model, Optimizer
     # Model is initialized with config.N_SOURCES (which is MAX_SOURCES_TRAIN)
     model = ConvTasNet(
-        N=config.N_ENCODER_FILTERS,
-        L=config.L_CONV_KERNEL_SIZE,
-        B=config.B_TCN_CHANNELS,
-        H=config.H_TCN_CHANNELS,
-        P=config.P_TCN_KERNEL_SIZE,
-        X=config.X_TCN_BLOCKS,
-        R=config.R_TCN_REPEATS,
-        C=config.N_SOURCES,  # Use the max number of sources
-        Sc=config.Sc_TCN_CHANNELS,
+        n=config.N_ENCODER_FILTERS,
+        l=config.L_CONV_KERNEL_SIZE,
+        b=config.B_TCN_CHANNELS,
+        h=config.H_TCN_CHANNELS,
+        p=config.P_TCN_KERNEL_SIZE,
+        x=config.X_TCN_BLOCKS,
+        r=config.R_TCN_REPEATS,
+        c=config.N_SOURCES,  # Use the max number of sources
+        sc=config.Sc_TCN_CHANNELS,
         norm_type=config.NORM_TYPE,
         causal=config.CAUSAL_CONV,
     ).to(device)

@@ -153,9 +153,7 @@ def create_training_progress_plot(metrics, save_path):
 # --- Functions for Individual Sample Visualization ---
 
 
-def plot_individual_waveforms(
-    sample_dir_name, condition, plots_dir, sr=config.SAMPLE_RATE
-):
+def plot_individual_waveforms(sample_dir_name, condition, plots_dir):
     """
     Plot and save waveforms for a specific sample and condition.
 
@@ -163,7 +161,6 @@ def plot_individual_waveforms(
         sample_dir_name (str): Name of the sample directory
         condition (str): SNR condition (e.g., 'clean', '20dB')
         plots_dir (str): Directory to save plots
-        sr (int): Sample rate
     """
     sample_path = os.path.join(OUTPUT_AUDIO_DIR_BASE, sample_dir_name)
     if not os.path.isdir(sample_path):
@@ -227,7 +224,7 @@ def plot_individual_waveforms(
             fontweight="bold",
         )
         plt.tight_layout(
-            rect=[0, 0, 1, 0.96]
+            rect=(0, 0, 1, 0.96)
         )  # Adjust layout to make space for suptitle
         save_name = f"waveforms_{sample_dir_name}_{condition}.svg"
         plt.savefig(os.path.join(plots_dir, save_name), format="svg", dpi=300)
@@ -268,6 +265,8 @@ def plot_individual_spectrograms(
         condition (str): SNR condition
         plots_dir (str): Directory to save plots
         sr (int): Sample rate
+        n_fft (int): Number of FFT components
+        hop_length (int): Hop length for STFT
         n_mels (int): Number of mel frequency bins
     """
     sample_path = os.path.join(OUTPUT_AUDIO_DIR_BASE, sample_dir_name)
@@ -307,18 +306,18 @@ def plot_individual_spectrograms(
         if os.path.exists(file_path):
             try:
                 data_lib, sr_lib = librosa.load(file_path, sr=sr)
-                S = librosa.feature.melspectrogram(
+                s = librosa.feature.melspectrogram(
                     y=data_lib,
                     sr=sr_lib,
                     n_fft=n_fft,
                     hop_length=hop_length,
                     n_mels=n_mels,
                 )
-                S_db = librosa.power_to_db(S, ref=np.max)
+                s_db = librosa.power_to_db(s, ref=np.max)
 
                 plt.subplot(num_files, 1, plot_idx)
                 librosa.display.specshow(
-                    S_db, sr=sr_lib, hop_length=hop_length, x_axis="time", y_axis="mel"
+                    s_db, sr=sr_lib, hop_length=hop_length, x_axis="time", y_axis="mel"
                 )
                 plt.colorbar(format="%+2.0f dB")
                 plt.title(f"Spectrogram: {label}", fontsize=10)
@@ -334,7 +333,7 @@ def plot_individual_spectrograms(
             fontsize=14,
             fontweight="bold",
         )
-        plt.tight_layout(rect=[0, 0, 1, 0.96])  # Adjust layout
+        plt.tight_layout(rect=(0, 0, 1, 0.96))  # Adjust layout
         save_name = f"spectrograms_{sample_dir_name}_{condition}.svg"
         plt.savefig(os.path.join(plots_dir, save_name), format="svg", dpi=300)
         plt.close()
@@ -356,7 +355,7 @@ def visualize_specific_sample(sample_id, condition, plots_dir, sr=config.SAMPLE_
         sr (int): Sample rate
     """
     logger.info(f"Visualizing individual sample: {sample_id}, Condition: {condition}")
-    plot_individual_waveforms(sample_id, condition, plots_dir, sr=sr)
+    plot_individual_waveforms(sample_id, condition, plots_dir)
     plot_individual_spectrograms(sample_id, condition, plots_dir, sr=sr)
     logger.info(f"Finished visualizing individual sample: {sample_id}")
 

@@ -144,17 +144,17 @@ NOISE_DIR = None  # Optional: Path to a directory of noise files for training/ev
 # --- Conv-TasNet Model Parameters ---
 # Adjusted model size slightly down from the "working" 2-source config
 # while keeping it reasonable for up to 10 sources.
-N_ENCODER_FILTERS = 256  # N: Number of filters in autoencoder (encoder output channels)
-L_CONV_KERNEL_SIZE = 16  # L: Length of the filters (kernel size) in autoencoder
+N_ENCODER_FILTERS = 256  # n: Number of filters in autoencoder (encoder output channels)
+L_CONV_KERNEL_SIZE = 16  # l: Length of the filters (kernel size) in autoencoder
 # Separator (TemporalConvNet - TCN) Parameters
 B_TCN_CHANNELS = (
-    128  # B: Number of channels in bottleneck and residual paths' 1x1-conv blocks
+    128  # b: Number of channels in bottleneck and residual paths' 1x1-conv blocks
 )
-H_TCN_CHANNELS = 256  # H: Number of channels in convolutional blocks (depthwise conv)
-P_TCN_KERNEL_SIZE = 4  # P: Kernel size in convolutional blocks (depthwise conv)
-X_TCN_BLOCKS = 8  # X: Number of convolutional blocks in each repeat (slightly reduced)
-R_TCN_REPEATS = 2  # R: Number of repeats of X blocks (slightly reduced)
-Sc_TCN_CHANNELS = 128  # Sc: Number of channels in skip-connection paths' 1x1-conv blocks. If <=0, skip-connections are not used. (reduced)
+H_TCN_CHANNELS = 256  # h: Number of channels in convolutional blocks (depthwise conv)
+P_TCN_KERNEL_SIZE = 4  # p: Kernel size in convolutional blocks (depthwise conv)
+X_TCN_BLOCKS = 8  # x: Number of convolutional blocks in each repeat (slightly reduced)
+R_TCN_REPEATS = 2  # r: Number of repeats of x blocks (slightly reduced)
+Sc_TCN_CHANNELS = 128  # sc: Number of channels in skip-connection paths' 1x1-conv blocks. If <=0, skip-connections are not used. (reduced)
 NORM_TYPE = "gLN"  # Type of normalization (gLN, cLN, BN)
 CAUSAL_CONV = False  # Use causal convolutions in TCN blocks (False for potentially better performance)
 
