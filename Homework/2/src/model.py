@@ -19,6 +19,7 @@ Classes:
 import torch
 import torch.nn as nn
 import torch.nn.functional as func
+from typing import cast, Iterable
 
 # Import config from the same directory
 import config
@@ -365,9 +366,11 @@ class TemporalConvNet(nn.Module):
         self.layer_norm = nn.LayerNorm(n)
         self.bottleneck_conv1x1 = nn.Conv1d(n, b, 1)
 
-        self.repeats = nn.ModuleList()
+        self.repeats: nn.ModuleList[nn.ModuleList[TemporalConvNetBlock]] = (
+            nn.ModuleList()
+        )
         for _ in range(r):
-            blocks = nn.ModuleList()
+            blocks: nn.ModuleList[TemporalConvNetBlock] = nn.ModuleList()
             for _ in range(x):
                 blocks.append(TemporalConvNetBlock(b, h, p, sc, norm_type, causal))
             self.repeats.append(blocks)
@@ -376,56 +379,72 @@ class TemporalConvNet(nn.Module):
         self.mask_conv1x1 = nn.Conv1d(sc if sc > 0 else b, c * n, 1)
 
     def forward(self, mixture_w):
-        """
-        Forward pass through the TCN separator network.
+        # mixture_w shape: (batch, N_encoder_filters, T_frames) - output of Encoder
 
-        Processes the encoded mixture representation through multiple TCN blocks
-        with dilated convolutions to generate separation masks for each source.
-        The network uses skip connections to aggregate multi-scale features
-        and applies sigmoid activation to ensure masks are in [0,1] range.
+        # 1. Initial LayerNorm and Bottleneck Convolution
+        # These layers (self.layer_norm, self.bottleneck_conv1x1) must be defined in __init__
+        # Transpose to (batch, T_frames, N_encoder_filters) for LayerNorm
+        processed_w = mixture_w.transpose(1, 2)
+        processed_w = self.layer_norm(processed_w)
+        # Transpose back to (batch, N_encoder_filters, T_frames)
+        processed_w = processed_w.transpose(1, 2)
+        processed_w = self.bottleneck_conv1x1(
+            processed_w
+        )  # Shape: (batch, B_tcn_channels, T_frames)
 
-        Args:
-            mixture_w: Encoded mixture representation (batch_size, n, t_frames)
+        skip_outputs_list = []  # To store skip_outputs if self.Sc > 0
+        current_block_input = processed_w
 
-        Returns:
-            masks: Separation masks for each source (batch_size, c, n, t_frames)
-                   Values in [0,1] range indicating how much each time-frequency
-                   bin belongs to each source.
-        """
-        batch_size, n, t_frames = mixture_w.shape
+        # 2. TCN Repeats and Blocks
+        # Iterate directly over the ModuleLists.
+        # The explicit type hint for 'repeat_module_list_instance' (nn.ModuleList[TemporalConvNetBlock]) is removed
+        # as we are now using cast for better type inference by the analyzer.
 
-        # Apply layer normalization and bottleneck convolution
-        out = self.layer_norm(mixture_w.transpose(1, 2)).transpose(1, 2)
-        out = self.bottleneck_conv1x1(out)
-
-        # Initialize skip connections accumulator if enabled
-        skip_connection_sum = None
-        if self.Sc > 0:
-            skip_connection_sum = torch.zeros(
-                (batch_size, self.Sc, t_frames), device=mixture_w.device
+        for repeat_module_list_instance in self.repeats:
+            # repeat_module_list_instance is an nn.ModuleList of TemporalConvNetBlock.
+            iterable_tcn_blocks_in_repeat = cast(
+                Iterable[TemporalConvNetBlock], repeat_module_list_instance
             )
 
-        # Process through all TCN repeats and blocks
-        for repeat_module in self.repeats:
-            residual_out, skip_out = repeat_module(out)
-            out = residual_out
-            # Accumulate skip connections for multi-scale feature aggregation
-            if skip_out is not None:
-                if skip_connection_sum is None:
-                    skip_connection_sum = skip_out
-                else:
-                    skip_connection_sum = skip_connection_sum + skip_out
-        # Use skip connections if available, otherwise use final block output
-        if skip_connection_sum is not None:
-            processed_output = skip_connection_sum
-        else:
-            processed_output = out
+            tcn_block_module: (
+                TemporalConvNetBlock  # Type hint for the inner loop variable
+            )
+            for (
+                tcn_block_module
+            ) in iterable_tcn_blocks_in_repeat:  # Iterate over casted version
+                # tcn_block_module is a TemporalConvNetBlock
 
-        # Generate final separation masks
-        processed_output = self.prelu_out(processed_output)
-        masks = self.mask_conv1x1(processed_output)
-        masks = masks.view(batch_size, self.C, n, t_frames)
-        masks = torch.sigmoid(masks)  # Ensure masks are in [0,1] range
+                residual_output, skip_output = tcn_block_module(current_block_input)
+
+                if self.Sc > 0 and skip_output is not None:
+                    skip_outputs_list.append(skip_output)
+
+                current_block_input = (
+                    residual_output  # Output of this block is input to the next
+                )
+
+        # Determine input for mask generation based on skip connections
+        if self.Sc > 0 and skip_outputs_list:
+            # Sum all collected skip connections
+            # Ensure all skip_outputs in the list have the same shape (Batch, SC, T_frames)
+            mask_input = torch.sum(torch.stack(skip_outputs_list, dim=0), dim=0)
+        else:  # No skip connections (self.Sc == 0) or no skip outputs were generated
+            mask_input = current_block_input  # Use the output of the last TCN block
+
+        # 3. Mask Generation
+        # These layers (self.output_prelu, self.mask_conv1x1) must be defined in __init__
+        # self.mask_conv1x1 should map from (B_tcn_channels or Sc_tcn_channels) to (N_sources * N_encoder_filters) channels
+        mask_output = self.prelu_out(mask_input)  # Corrected from self.output_prelu
+        masks = self.mask_conv1x1(
+            mask_output
+        )  # Shape: (batch, N_sources * N_encoder_filters, T_frames)
+
+        # Reshape masks to (batch, N_sources, N_encoder_filters, T_frames)
+        batch_size, _, t_frames = masks.shape
+        # Ensure self.C and self.N are available from __init__
+        masks = masks.view(
+            batch_size, self.C, self.N, t_frames
+        )  # Corrected from self.n_sources and self.n_encoder_filters
 
         return masks
 
