@@ -1,43 +1,37 @@
-#!/usr/bin/env python3
 """
-Visualization script for Conv-TasNet multi-speaker speech separation results.
-Analyzes training metrics and SNR-based evaluation performance.
+Visualization utilities for Conv-TasNet audio source separation project.
+
+This module contains functions for creating plots and visualizations of
+training progress, evaluation results, and audio analysis.
 """
 
-import json
-import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib.pyplot as plt
 import os
-import librosa  # Added for spectrograms and audio loading
-import librosa.display  # Added for spectrogram display
-from scipy.io import wavfile  # Added for wav file reading
+from scipy.io import wavfile
+import librosa
+import librosa.display
 
-# Determine the project root directory dynamically
-# Assuming this script is in src/utils/visualize.py, project_root is two levels up.
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+from logger_config import setup_visualization_logger
+import config
+import utils
+
+# Initialize logger for visualization module
+logger = setup_visualization_logger()
 
 # --- Configuration for individual sample visualization ---
-OUTPUT_AUDIO_DIR_BASE = os.path.join(
-    PROJECT_ROOT, "assets", "audio", "eval"
-)  # Use PROJECT_ROOT
-DEFAULT_SR = 16000  # Default sample rate
-
-
-def load_metrics(metrics_file_path):
-    """Load training metrics from JSON file."""
-    try:
-        with open(metrics_file_path, "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        print(f"Metrics file not found: {metrics_file_path}")
-        return None
-    except json.JSONDecodeError:
-        print(f"Error reading JSON from: {metrics_file_path}")
-        return None
+OUTPUT_AUDIO_DIR_BASE = os.path.join(config.PROJECT_ROOT, "assets", "audio", "eval")
 
 
 def create_snr_performance_plot(metrics, save_path):
-    """Create a plot showing SI-SNR performance vs. input SNR conditions."""
+    """
+    Create a plot showing SI-SNR performance vs. input SNR conditions.
+
+    Args:
+        metrics (dict): Dictionary containing evaluation metrics
+        save_path (str): Path where the plot will be saved
+    """
+    logger.info("Creating SNR performance plot")
 
     # Extract SNR conditions and corresponding SI-SNR values
     snr_conditions = []
@@ -115,11 +109,17 @@ def create_snr_performance_plot(metrics, save_path):
     plt.tight_layout()
     plt.savefig(save_path, format="svg", dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"SNR performance plot saved to: {save_path}")
+    logger.info(f"SNR performance plot saved to: {save_path}")
 
 
 def create_training_progress_plot(metrics, save_path):
-    """Create a plot showing training progress over epochs."""
+    """
+    Create a plot showing training progress over epochs.
+
+    Args:
+        metrics (dict): Dictionary containing training metrics
+        save_path (str): Path where the plot will be saved
+    """
 
     epochs = metrics["epoch_numbers"]
     losses = metrics["training_avg_losses"]
@@ -147,112 +147,27 @@ def create_training_progress_plot(metrics, save_path):
     plt.tight_layout()
     plt.savefig(save_path, format="svg", dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"Training progress plot saved to: {save_path}")
-
-
-def create_summary_report(metrics, save_path):
-    """Create a text summary report of the results."""
-
-    report = []
-    report.append("=" * 80)
-    report.append("Conv-TasNet Multi-Speaker Speech Separation - Training Summary")
-    report.append("=" * 80)
-    report.append("")
-
-    # Training Summary
-    report.append("TRAINING SUMMARY:")
-    report.append(f"  • Epochs Trained: {metrics['epochs_trained']}")
-    report.append(f"  • Final Training Loss: {metrics['training_avg_losses'][-1]:.4f}")
-    report.append(
-        f"  • Final Training SI-SNR: {metrics['training_avg_si_snrs'][-1]:.2f} dB"
-    )
-    report.append("")
-
-    # Evaluation Summary
-    report.append("EVALUATION SUMMARY (SI-SNR Performance):")
-    eval_results = metrics["evaluation_final_si_snrs"]
-
-    # Sort by performance (best to worst)
-    sorted_results = sorted(eval_results.items(), key=lambda x: x[1], reverse=True)
-
-    for condition, si_snr in sorted_results:
-        report.append(f"  • {condition:>6}: {si_snr:>6.2f} dB")
-
-    report.append("")
-
-    # Analysis
-    report.append("ANALYSIS:")
-    best_condition = max(eval_results.items(), key=lambda x: x[1])
-    worst_condition = min(eval_results.items(), key=lambda x: x[1])
-
-    report.append(
-        f"  • Best Performance: {best_condition[0]} ({best_condition[1]:.2f} dB)"
-    )
-    report.append(
-        f"  • Worst Performance: {worst_condition[0]} ({worst_condition[1]:.2f} dB)"
-    )
-
-    # Performance degradation analysis
-    clean_performance = eval_results.get("clean", 0)
-    degradations = []
-    for condition, si_snr in eval_results.items():
-        if condition != "clean":
-            degradation = clean_performance - si_snr
-            degradations.append((condition, degradation))
-
-    if degradations:
-        report.append("")
-        report.append("  • Performance Degradation from Clean Condition:")
-        for condition, deg in sorted(degradations, key=lambda x: x[1]):
-            report.append(f"    - {condition}: {deg:.2f} dB worse")
-
-    report.append("")
-    report.append("OBSERVATIONS:")
-    report.append(
-        "  • All SI-SNR values are negative, indicating the separated signals"
-    )
-    report.append("    are currently worse than the input mixture.")
-    report.append("  • This is expected for a model trained for only 1 epoch.")
-    report.append("  • Performance generally degrades with lower input SNR conditions.")
-    report.append("  • The model shows some robustness across different noise levels.")
-    report.append("")
-    report.append("RECOMMENDATIONS:")
-    report.append("  • Train for more epochs (typically 50-100+ epochs)")
-    report.append("  • Monitor convergence using validation data")
-    report.append("  • Consider learning rate scheduling")
-    report.append("  • Evaluate with more test samples for statistical significance")
-    report.append("")
-    report.append("=" * 80)
-
-    # Save the report
-    with open(save_path, "w") as f:
-        f.write("\n".join(report))
-
-    print(f"Summary report saved to: {save_path}")
-
-    # Also print to console
-    print("\n" + "\n".join(report))
+    logger.info(f"Training progress plot saved to: {save_path}")
 
 
 # --- Functions for Individual Sample Visualization ---
 
 
-def to_float(data):
-    """Converts audio data to float32, normalizing if it's an integer type."""
-    if data.dtype != np.float32 and data.dtype != np.float64:
-        if np.issubdtype(data.dtype, np.integer):
-            max_val = np.iinfo(data.dtype).max
-            data = data.astype(np.float32) / max_val
-        else:
-            data = data.astype(np.float32)
-    return data
+def plot_individual_waveforms(
+    sample_dir_name, condition, plots_dir, sr=config.SAMPLE_RATE
+):
+    """
+    Plot and save waveforms for a specific sample and condition.
 
-
-def plot_individual_waveforms(sample_dir_name, condition, plots_dir, sr=DEFAULT_SR):
-    """Plots and saves waveforms for a specific sample and condition."""
+    Args:
+        sample_dir_name (str): Name of the sample directory
+        condition (str): SNR condition (e.g., 'clean', '20dB')
+        plots_dir (str): Directory to save plots
+        sr (int): Sample rate
+    """
     sample_path = os.path.join(OUTPUT_AUDIO_DIR_BASE, sample_dir_name)
     if not os.path.isdir(sample_path):
-        print(f"Sample directory not found: {sample_path}")
+        logger.warning(f"Sample directory not found: {sample_path}")
         return
 
     files_to_visualize = {
@@ -275,7 +190,7 @@ def plot_individual_waveforms(sample_dir_name, condition, plots_dir, sr=DEFAULT_
         1 for f_path in files_to_visualize.values() if os.path.exists(f_path)
     )
     if num_files == 0:
-        print(
+        logger.warning(
             f"No audio files found for {sample_dir_name}, condition {condition}. Skipping waveform plots."
         )
         return
@@ -287,7 +202,9 @@ def plot_individual_waveforms(sample_dir_name, condition, plots_dir, sr=DEFAULT_
         if os.path.exists(file_path):
             try:
                 sample_rate_wav, data_wav = wavfile.read(file_path)
-                data_wav = to_float(data_wav)  # Ensure float for consistency
+                data_wav = utils.normalize_audio_to_float(
+                    data_wav
+                )  # Ensure float for consistency
                 time = np.arange(len(data_wav)) / sample_rate_wav
 
                 plt.subplot(num_files, 1, plot_idx)
@@ -299,9 +216,9 @@ def plot_individual_waveforms(sample_dir_name, condition, plots_dir, sr=DEFAULT_
                 plt.grid(True, linestyle="--", alpha=0.7)
                 plot_idx += 1
             except Exception as e:
-                print(f"Error plotting waveform for {file_path}: {e}")
+                logger.error(f"Error plotting waveform for {file_path}: {e}")
         else:
-            print(f"Skipping waveform (not found): {file_path}")
+            logger.debug(f"Skipping waveform (not found): {file_path}")
 
     if plot_idx > 1:  # Only save if at least one plot was made
         plt.suptitle(
@@ -315,7 +232,7 @@ def plot_individual_waveforms(sample_dir_name, condition, plots_dir, sr=DEFAULT_
         save_name = f"waveforms_{sample_dir_name}_{condition}.svg"
         plt.savefig(os.path.join(plots_dir, save_name), format="svg", dpi=300)
         plt.close()
-        print(
+        logger.info(
             f"Individual waveform plot saved to: {os.path.join(plots_dir, save_name)}"
         )
     else:
@@ -326,15 +243,36 @@ def plot_individual_spectrograms(
     sample_dir_name,
     condition,
     plots_dir,
-    sr=DEFAULT_SR,
-    n_fft=1024,
-    hop_length=256,
-    n_mels=80,
+    sr=config.SAMPLE_RATE,
+    n_fft=(
+        config.VIS_SPECTROGRAM_N_FFT
+        if hasattr(config, "VIS_SPECTROGRAM_N_FFT")
+        else 1024
+    ),  # Use config or default
+    hop_length=(
+        config.VIS_SPECTROGRAM_HOP_LENGTH
+        if hasattr(config, "VIS_SPECTROGRAM_HOP_LENGTH")
+        else 256
+    ),  # Use config or default
+    n_mels=(
+        config.VIS_SPECTROGRAM_N_MELS
+        if hasattr(config, "VIS_SPECTROGRAM_N_MELS")
+        else 80
+    ),  # Use config or default
 ):
-    """Plots and saves spectrograms for a specific sample and condition."""
+    """
+    Plot and save spectrograms for a specific sample and condition.
+
+    Args:
+        sample_dir_name (str): Name of the sample directory
+        condition (str): SNR condition
+        plots_dir (str): Directory to save plots
+        sr (int): Sample rate
+        n_mels (int): Number of mel frequency bins
+    """
     sample_path = os.path.join(OUTPUT_AUDIO_DIR_BASE, sample_dir_name)
     if not os.path.isdir(sample_path):
-        print(f"Sample directory not found: {sample_path}")
+        logger.warning(f"Sample directory not found: {sample_path}")
         return
 
     files_to_visualize = {
@@ -357,7 +295,7 @@ def plot_individual_spectrograms(
         1 for f_path in files_to_visualize.values() if os.path.exists(f_path)
     )
     if num_files == 0:
-        print(
+        logger.warning(
             f"No audio files found for {sample_dir_name}, condition {condition}. Skipping spectrogram plots."
         )
         return
@@ -386,9 +324,9 @@ def plot_individual_spectrograms(
                 plt.title(f"Spectrogram: {label}", fontsize=10)
                 plot_idx += 1
             except Exception as e:
-                print(f"Error plotting spectrogram for {file_path}: {e}")
+                logger.error(f"Error plotting spectrogram for {file_path}: {e}")
         else:
-            print(f"Skipping spectrogram (not found): {file_path}")
+            logger.debug(f"Skipping spectrogram (not found): {file_path}")
 
     if plot_idx > 1:  # Only save if at least one plot was made
         plt.suptitle(
@@ -400,47 +338,52 @@ def plot_individual_spectrograms(
         save_name = f"spectrograms_{sample_dir_name}_{condition}.svg"
         plt.savefig(os.path.join(plots_dir, save_name), format="svg", dpi=300)
         plt.close()
-        print(
+        logger.info(
             f"Individual spectrogram plot saved to: {os.path.join(plots_dir, save_name)}"
         )
     else:
         plt.close()
 
 
-def visualize_specific_sample(sample_id, condition, plots_dir, sr=DEFAULT_SR):
-    """Generates and saves waveform and spectrogram plots for a specific sample."""
-    print(
-        f"\n--- Visualizing individual sample: {sample_id}, Condition: {condition} ---"
-    )
+def visualize_specific_sample(sample_id, condition, plots_dir, sr=config.SAMPLE_RATE):
+    """
+    Generate and save waveform and spectrogram plots for a specific sample.
+
+    Args:
+        sample_id (str): Sample identifier
+        condition (str): SNR condition
+        plots_dir (str): Directory to save plots
+        sr (int): Sample rate
+    """
+    logger.info(f"Visualizing individual sample: {sample_id}, Condition: {condition}")
     plot_individual_waveforms(sample_id, condition, plots_dir, sr=sr)
     plot_individual_spectrograms(sample_id, condition, plots_dir, sr=sr)
-    print(f"--- Finished visualizing individual sample: {sample_id} ---")
+    logger.info(f"Finished visualizing individual sample: {sample_id}")
 
 
 def main():
     """Main visualization function."""
+    logger.info("Starting visualization process")
 
     # Paths relative to the project root
-    metrics_file = os.path.join(
-        PROJECT_ROOT, "model", "training_metrics.json"
-    )  # Use PROJECT_ROOT
-    plots_dir = os.path.join(PROJECT_ROOT, "plots")  # Use PROJECT_ROOT
+    metrics_file = os.path.join(config.PROJECT_ROOT, "model", "training_metrics.json")
+    plots_dir = os.path.join(config.PROJECT_ROOT, "plots")
 
     # Create plots directory
     os.makedirs(plots_dir, exist_ok=True)
 
     # Load metrics
-    print("Loading training metrics...")
-    metrics = load_metrics(metrics_file)
+    logger.info("Loading training metrics...")
+    metrics = utils.load_metrics(metrics_file)
 
     if metrics is None:
-        print("Failed to load metrics. Exiting.")
+        logger.error("Failed to load metrics. Exiting.")
         return
 
-    print(f"Successfully loaded metrics for {metrics['epochs_trained']} epoch(s)")
+    logger.info(f"Successfully loaded metrics for {metrics['epochs_trained']} epoch(s)")
 
     # Create visualizations
-    print("\nCreating visualizations...")
+    logger.info("Creating visualizations...")
 
     # 1. SNR Performance Plot
     snr_plot_path = os.path.join(plots_dir, "snr_performance.svg")
@@ -450,11 +393,7 @@ def main():
     training_plot_path = os.path.join(plots_dir, "training_progress.svg")
     create_training_progress_plot(metrics, training_plot_path)
 
-    # 3. Summary Report
-    report_path = os.path.join(plots_dir, "training_summary.txt")
-    create_summary_report(metrics, report_path)
-
-    print(f"\nAll visualizations saved to: {plots_dir}")
+    logger.info(f"All visualizations saved to: {plots_dir}")
 
     # --- Add visualization for a specific sample ---
     # Example: Visualize 'sample1' under 'clean' and 'snr0' conditions
@@ -467,17 +406,17 @@ def main():
     )
 
     if os.path.exists(sample1_clean_path):
-        visualize_specific_sample("sample1", "clean", plots_dir, sr=DEFAULT_SR)
+        visualize_specific_sample("sample1", "clean", plots_dir, sr=config.SAMPLE_RATE)
     else:
-        print(
-            f"\nSkipping visualization for sample1 (clean) - mixture file not found at {sample1_clean_path}"
+        logger.warning(
+            f"Skipping visualization for sample1 (clean) - mixture file not found at {sample1_clean_path}"
         )
 
     if os.path.exists(sample1_snr0_path):
-        visualize_specific_sample("sample1", "snr0", plots_dir, sr=DEFAULT_SR)
+        visualize_specific_sample("sample1", "snr0", plots_dir, sr=config.SAMPLE_RATE)
     else:
-        print(
-            f"\nSkipping visualization for sample1 (snr0) - mixture file not found at {sample1_snr0_path}"
+        logger.warning(
+            f"Skipping visualization for sample1 (snr0) - mixture file not found at {sample1_snr0_path}"
         )
 
     # You can add more calls to visualize_specific_sample for other samples/conditions

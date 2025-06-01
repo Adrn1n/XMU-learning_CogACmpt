@@ -1,5 +1,17 @@
-import torch
+"""
+Loss Functions for Conv-TasNet Audio Source Separation.
+
+This module implements loss functions specifically designed for audio source separation,
+including Scale-Invariant Signal-to-Noise Ratio (SI-SNR) with Permutation Invariant
+Training (PIT) support.
+
+Functions:
+    si_snr_loss: Computes SI-SNR loss with optional PIT for source separation training
+    match_length: Utility function to match tensor lengths for loss computation
+"""
+
 import itertools
+import torch
 
 # Import config from the same directory
 import config
@@ -85,6 +97,18 @@ def si_snr_loss(
 
 
 def match_length(estimated, target):
-    """Truncates estimated and target tensors to the minimum of their lengths."""
+    """
+    Truncates estimated and target tensors to the minimum of their lengths.
+
+    Ensures that estimated and target tensors have matching time dimensions
+    for accurate loss computation by truncating to the shorter length.
+
+    Args:
+        estimated (torch.Tensor): Estimated source tensor (..., time)
+        target (torch.Tensor): Target source tensor (..., time)
+
+    Returns:
+        tuple: (estimated_truncated, target_truncated) with matching lengths
+    """
     min_len = min(estimated.shape[-1], target.shape[-1])
     return estimated[..., :min_len], target[..., :min_len]

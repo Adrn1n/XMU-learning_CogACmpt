@@ -1,5 +1,6 @@
 .DS_Store
 __pycache__/
+log/
 Homework/1/assets/audio/reverse
 Homework/1/assets/audio/random
 Homework/2/assets/audio/train/LibriSpeech/train-clean-100/*
