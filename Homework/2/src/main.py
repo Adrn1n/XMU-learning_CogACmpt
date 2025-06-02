@@ -13,6 +13,7 @@ import torch.optim as optim
 import numpy as np
 import os
 import json
+import datetime
 
 from logger_config import (
     setup_main_logger,
@@ -638,194 +639,229 @@ def main_run():
 
     logger.info("Starting Conv-TasNet main script.")
 
-    # --- User choice for training or evaluation ---
-    if os.path.exists(MODEL_PATH):
-        choice = input(
-            "Model already exists. Do you want to (t)rain again, (e)valuate, or (q)uit? [t/e/q]: "
-        ).lower()
-        if choice == "q":
-            logger.info("Quitting.")
-            return
-        elif choice == "e":
-            skip_training = True
-            logger.info("Skipping training and proceeding to evaluation.")
-        else:  # Default to training if 't' or anything else
-            skip_training = False
-            logger.info("Proceeding with training.")
+    # Load existing metrics or initialize with a proper structure
+    if os.path.exists(METRICS_FILE_PATH):
+        try:
+            with open(METRICS_FILE_PATH, "r") as f:
+                metrics = json.load(f)
+            logger.info(f"Loaded existing metrics from {METRICS_FILE_PATH}")
+            # Ensure base structure exists if loading an old/incomplete metrics file
+            if "training_runs" not in metrics or not isinstance(
+                metrics.get("training_runs"), list
+            ):
+                metrics["training_runs"] = []
+            if "evaluation_runs" not in metrics or not isinstance(
+                metrics.get("evaluation_runs"), list
+            ):
+                metrics["evaluation_runs"] = []
+        except json.JSONDecodeError:
+            logger.error(
+                f"Error decoding JSON from {METRICS_FILE_PATH}. Initializing with empty structure."
+            )
+            metrics = {"training_runs": [], "evaluation_runs": []}
     else:
-        skip_training = False
-        logger.info("No existing model found. Proceeding with training.")
+        logger.info(
+            f"No metrics file found at {METRICS_FILE_PATH}. Initializing with empty structure."
+        )
+        metrics = {"training_runs": [], "evaluation_runs": []}
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
 
-    # Data directories from config
-    train_librispeech_dir = config.TRAIN_LIBRISPEECH_DIR
-    test_librispeech_dir = config.TEST_LIBRISPEECH_DIR
-    # noise_dir = config.NOISE_DIR # For future use with specific noise files
+    # --- Model Initialization ---
+    # This assumes your model parameters are available from config or globally
+    model = ConvTasNet(
+        N_ENCODER_FILTERS,
+        L_CONV_KERNEL_SIZE,
+        B_TCN_CHANNELS,
+        H_TCN_CHANNELS,
+        Sc_TCN_CHANNELS,
+        P_TCN_KERNEL_SIZE,
+        X_TCN_BLOCKS,
+        R_TCN_REPEATS,
+        N_SOURCES,
+        NORM_TYPE,
+        CAUSAL_CONV,
+    ).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
-    # Collect all .flac files using data_utils
+    # --- Data Loading ---
     train_filepaths = utils.load_audio_filepaths(
-        train_librispeech_dir, max_files=config.MAX_TRAIN_FILES  # Use config value
+        config.TRAIN_LIBRISPEECH_DIR, max_files=MAX_TRAIN_FILES
     )
     test_filepaths = utils.load_audio_filepaths(
-        test_librispeech_dir, max_files=config.MAX_TEST_FILES  # Use config value
+        config.TEST_LIBRISPEECH_DIR, max_files=MAX_TEST_FILES
     )
     logger.info(
         f"Found {len(train_filepaths)} training files and {len(test_filepaths)} test files."
     )
 
-    # Limit number of files for faster execution (optional) - This is now handled by MAX_TRAIN_FILES/MAX_TEST_FILES in load_audio_filepaths
-    # if config.MAX_TRAIN_FILES is not None and config.MAX_TRAIN_FILES > 0:
-    #     train_filepaths = train_filepaths[: config.MAX_TRAIN_FILES]
-    # if config.MAX_TEST_FILES is not None and config.MAX_TEST_FILES > 0:
-    #     test_filepaths = test_filepaths[: config.MAX_TEST_FILES]
+    # --- User choice for training or evaluation ---
+    perform_training = False
+    model_ready_for_eval = False  # Tracks if a model is loaded/trained for evaluation
 
-    logger.info(
-        f"Using {len(train_filepaths)} training files and {len(test_filepaths)} test files for this run."
-    )
-
-    if (
-        not train_filepaths
-        or not test_filepaths
-        or len(test_filepaths) < config.MIN_SOURCES_EVAL
-    ):
-        logger.error(
-            f"Not enough audio files found. Need at least {config.MIN_SOURCES_EVAL} for evaluation. Exiting."
-        )
-        return
-    if len(train_filepaths) < config.MIN_SOURCES_TRAIN:
-        logger.error(
-            f"Not enough audio files found for training. Need at least {config.MIN_SOURCES_TRAIN}. Exiting."
-        )
-        return
-
-    # Model, Optimizer
-    # Model is initialized with config.N_SOURCES (which is MAX_SOURCES_TRAIN)
-    model = ConvTasNet(
-        n=config.N_ENCODER_FILTERS,
-        l=config.L_CONV_KERNEL_SIZE,
-        b=config.B_TCN_CHANNELS,
-        h=config.H_TCN_CHANNELS,
-        p=config.P_TCN_KERNEL_SIZE,
-        x=config.X_TCN_BLOCKS,
-        r=config.R_TCN_REPEATS,
-        c=config.N_SOURCES,  # Use the max number of sources
-        sc=config.Sc_TCN_CHANNELS,
-        norm_type=config.NORM_TYPE,
-        causal=config.CAUSAL_CONV,
-    ).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=config.LEARNING_RATE)
-
-    # ... (model loading remains similar) ...
-    if os.path.exists(config.MODEL_PATH):
-        logger.info(f"Loading pre-trained model from {config.MODEL_PATH}")
-        try:
-            model.load_state_dict(torch.load(config.MODEL_PATH, map_location=device))
-            logger.info("Model loaded successfully.")
-        except Exception as e:
-            logger.error(f"Error loading model: {e}. Training from scratch.")
+    if os.path.exists(MODEL_PATH):
+        choice = input(
+            "Model already exists. Do you want to (t)rain again, (e)valuate, or (q)uit? [t/e/q]: "
+        ).lower()
+        if choice == "q":
+            logger.info("Quitting application.")
+            return
+        elif choice == "e":
+            logger.info("Attempting to load model for evaluation only.")
+            try:
+                model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+                logger.info(f"Model loaded from {MODEL_PATH} for evaluation.")
+                model_ready_for_eval = True
+                perform_evaluation = True
+            except Exception as e:
+                logger.error(
+                    f"Failed to load model from {MODEL_PATH}: {e}. Cannot evaluate."
+                )
+                return  # Exit if model load fails for eval-only mode
+        else:  # 't' or any other input defaults to train
+            logger.info("Proceeding with training (and subsequent evaluation).")
+            perform_training = True
+            perform_evaluation = True  # Evaluate after training
     else:
         logger.info(
-            f"No pre-trained model found at {config.MODEL_PATH}. Training from scratch."
+            f"No model found at {MODEL_PATH}. Proceeding with training (and subsequent evaluation)."
         )
+        perform_training = True
+        perform_evaluation = True
 
-    epochs_to_train = config.EPOCHS_TO_TRAIN
-    # training_losses = # These are returned by train function
-    # training_si_snrs = []
+    # --- Training Phase ---
+    if perform_training:
+        if not train_filepaths:
+            logger.warning("No training files found. Skipping training.")
+        else:
+            logger.info("--- Starting Training ---")
+            training_losses, training_si_snrs = (
+                train(  # train() returns lists of per-epoch values
+                    model,
+                    train_filepaths,
+                    optimizer,
+                    device,
+                    epochs=EPOCHS_TO_TRAIN,
+                    batch_size=BATCH_SIZE_TRAIN,
+                    noise_level=NOISE_LEVEL_TRAIN,
+                    model_n_sources=N_SOURCES,
+                )
+            )
+            logger.info("Training finished.")
+            if not os.path.exists(MODEL_DIR):
+                os.makedirs(MODEL_DIR)
+            torch.save(model.state_dict(), MODEL_PATH)
+            logger.info(f"Model saved to {MODEL_PATH}")
+            model_ready_for_eval = True  # Model is now current and in memory
 
-    if not skip_training:
-        train_logger.info("Starting training process...")
-        if epochs_to_train > 0:
-            logger.info("Starting training...")
-            training_losses, training_si_snrs = train(
-                model,
-                train_filepaths,
-                optimizer,
-                device=device,
-                epochs=epochs_to_train,
-                batch_size=config.BATCH_SIZE_TRAIN,
-                min_sources=config.MIN_SOURCES_TRAIN,  # Pass min/max
-                max_sources=config.MAX_SOURCES_TRAIN,  # Pass min/max
-                noise_level=config.NOISE_LEVEL_TRAIN,
-                sample_rate=config.SAMPLE_RATE,
-                duration_samples=config.DURATION_SAMPLES,
-                model_n_sources=config.N_SOURCES,  # Pass model's N_SOURCES
-            )
-            # Save model after training
-            if not os.path.exists(config.MODEL_DIR):
-                os.makedirs(config.MODEL_DIR)
-            torch.save(model.state_dict(), config.MODEL_PATH)
-            logger.info(f"Model saved to {config.MODEL_PATH}")
-        else:
-            logger.info("Skipping training as epochs_to_train is 0.")
-            # If not training, initialize with empty lists or load previous if available
-            training_losses = []
-            training_si_snrs = []
-    else:
-        logger.info("Skipping training as per user choice or existing model.")
-        # Load existing metrics if available to continue evaluation or visualization
-        if os.path.exists(METRICS_FILE_PATH):
-            with open(METRICS_FILE_PATH, "r") as f:
-                metrics = json.load(f)
-            logger.info(f"Loaded existing metrics from {METRICS_FILE_PATH}")
-        else:
-            logger.warning(
-                f"No metrics file found at {METRICS_FILE_PATH}. Evaluation might be limited."
-            )
-            metrics = {}  # Initialize empty metrics if none exist
+            # Record training metrics
+            current_training_run_metrics = {
+                "timestamp": datetime.datetime.now().isoformat(),
+                "epochs_trained_config": EPOCHS_TO_TRAIN,
+                "epochs_actually_run": len(training_losses),
+                "batch_size": BATCH_SIZE_TRAIN,
+                "learning_rate": LEARNING_RATE,
+                "noise_level_train": NOISE_LEVEL_TRAIN,
+                "avg_losses_per_epoch": training_losses,  # List of losses per epoch
+                "avg_si_snrs_per_epoch": training_si_snrs,  # List of SI-SNRs per epoch
+            }
+            metrics["training_runs"].append(current_training_run_metrics)
+            logger.info("Training metrics recorded.")
 
     # --- Evaluation Phase ---
-    eval_logger.info("Starting evaluation process...")
-    logger.info("\n--- Starting SNR-based Evaluation ---")
-    evaluation_final_si_snrs = {}
+    if perform_evaluation:
+        if not test_filepaths:
+            logger.warning("No test files found. Skipping evaluation.")
+        elif not model_ready_for_eval and not os.path.exists(
+            MODEL_PATH
+        ):  # Check if a model is available
+            logger.error(
+                f"No model available (neither trained this session nor found at {MODEL_PATH}). Cannot evaluate."
+            )
+        else:
+            if (
+                not model_ready_for_eval
+            ):  # If not trained in this session, try to load it
+                try:
+                    model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+                    logger.info(f"Model re-loaded from {MODEL_PATH} for evaluation.")
+                    model_ready_for_eval = True
+                except Exception as e:
+                    logger.error(
+                        f"Failed to load model from {MODEL_PATH} for evaluation: {e}. Skipping evaluation."
+                    )
 
-    for snr_db_eval in config.SNR_CONDITIONS_DB:
-        snr_label = f"{snr_db_eval}dB" if snr_db_eval is not None else "clean"
-        logger.info(f"--- Evaluating for SNR: {snr_label} ---")
+            if model_ready_for_eval:  # Proceed if model is ready
+                logger.info("--- Starting Evaluation ---")
+                current_evaluation_run_metrics = {
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "model_path_used": MODEL_PATH,
+                    "conditions": {},
+                }
 
-        avg_si_snr = evaluate(
-            model,
-            test_filepaths,
-            device=device,
-            min_sources=config.MIN_SOURCES_EVAL,  # Pass min/max for eval
-            max_sources=config.MAX_SOURCES_EVAL,  # Pass min/max for eval
-            batch_size=config.BATCH_SIZE_EVAL,
-            target_snr_db=snr_db_eval,
-            sample_rate=config.SAMPLE_RATE,
-            duration_samples=config.DURATION_SAMPLES,
-            save_audio_flag=True,
-            num_samples_to_save=config.NUM_SAMPLES_TO_SAVE_EVAL,
-            output_dir_base=config.OUTPUT_AUDIO_DIR_BASE,
-            condition_name=snr_label,
-            model_n_sources=config.N_SOURCES,  # Pass model's N_SOURCES
+                # Evaluate clean (no added noise, or baseline)
+                logger.info("Evaluating on clean test set (or baseline conditions).")
+                avg_si_snr_clean = evaluate(
+                    model,
+                    test_filepaths,
+                    device,
+                    batch_size=BATCH_SIZE_EVAL,
+                    target_snr_db=None,
+                    save_audio_flag=True,
+                    num_samples_to_save=NUM_SAMPLES_TO_SAVE_EVAL,
+                    output_dir_base=OUTPUT_AUDIO_DIR_BASE,
+                    condition_name="clean",
+                    model_n_sources=N_SOURCES,
+                )
+                logger.info(f"Average SI-SNR (Clean): {avg_si_snr_clean:.2f} dB")
+                current_evaluation_run_metrics["conditions"]["clean"] = {
+                    "avg_si_snr": avg_si_snr_clean
+                }
+
+                # Evaluate with different SNR conditions from config
+                for snr_db in SNR_CONDITIONS_DB:
+                    condition_name = f"{snr_db}dB"
+                    logger.info(f"Evaluating with target SNR: {snr_db} dB")
+                    avg_si_snr_noisy = evaluate(
+                        model,
+                        test_filepaths,
+                        device,
+                        batch_size=BATCH_SIZE_EVAL,
+                        target_snr_db=snr_db,
+                        save_audio_flag=True,
+                        num_samples_to_save=NUM_SAMPLES_TO_SAVE_EVAL,
+                        output_dir_base=OUTPUT_AUDIO_DIR_BASE,
+                        condition_name=condition_name,
+                        model_n_sources=N_SOURCES,
+                    )
+                    logger.info(
+                        f"Average SI-SNR ({condition_name}): {avg_si_snr_noisy:.2f} dB"
+                    )
+                    current_evaluation_run_metrics["conditions"][condition_name] = {
+                        "avg_si_snr": avg_si_snr_noisy
+                    }
+
+                metrics["evaluation_runs"].append(current_evaluation_run_metrics)
+                logger.info("Evaluation metrics recorded.")
+
+    # --- Save all collected metrics ---
+    # Only save if training or evaluation was performed and metrics might have changed
+    if perform_training or (perform_evaluation and model_ready_for_eval):
+        try:
+            with open(METRICS_FILE_PATH, "w") as f:
+                json.dump(metrics, f, indent=4)
+            logger.info(f"All metrics saved to {METRICS_FILE_PATH}")
+        except Exception as e:
+            logger.error(f"Failed to save metrics to {METRICS_FILE_PATH}: {e}")
+    else:
+        logger.info(
+            "No new training or evaluation performed that would update metrics. Metrics file not re-saved."
         )
 
-        logger.info(f"Average SI-SNR ({snr_label}): {avg_si_snr:.2f} dB")
-        evaluation_final_si_snrs[snr_label] = avg_si_snr
-
-    # Save metrics
-    metrics_to_save = {
-        "epochs_trained": epochs_to_train,
-        "epoch_numbers": (
-            list(range(1, epochs_to_train + 1)) if epochs_to_train > 0 else []
-        ),
-        "training_avg_losses": training_losses,
-        "training_avg_si_snrs": training_si_snrs,
-        "evaluation_final_si_snrs": evaluation_final_si_snrs,
-        # Add other relevant config parameters if needed for reproducibility
-        "config_N_SOURCES": config.N_SOURCES,
-        "config_MIN_SOURCES_TRAIN": config.MIN_SOURCES_TRAIN,
-        "config_MAX_SOURCES_TRAIN": config.MAX_SOURCES_TRAIN,
-        "config_MIN_SOURCES_EVAL": config.MIN_SOURCES_EVAL,
-        "config_MAX_SOURCES_EVAL": config.MAX_SOURCES_EVAL,
-    }
-    if not os.path.exists(config.MODEL_DIR):
-        os.makedirs(config.MODEL_DIR)
-    with open(config.METRICS_FILE_PATH, "w") as f:
-        json.dump(metrics_to_save, f, indent=4)
-    logger.info(f"Training and evaluation metrics saved to {config.METRICS_FILE_PATH}")
+    logger.info("Main script finished.")
 
 
+# Ensure the main execution guard is at the end of the script
 if __name__ == "__main__":
     main_run()
