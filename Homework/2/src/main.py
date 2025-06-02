@@ -671,15 +671,15 @@ def main_run():
     # --- Model Initialization ---
     # This assumes your model parameters are available from config or globally
     model = ConvTasNet(
-        N_ENCODER_FILTERS,
-        L_CONV_KERNEL_SIZE,
-        B_TCN_CHANNELS,
-        H_TCN_CHANNELS,
-        Sc_TCN_CHANNELS,
-        P_TCN_KERNEL_SIZE,
-        X_TCN_BLOCKS,
-        R_TCN_REPEATS,
-        N_SOURCES,
+        N_ENCODER_FILTERS,  # n
+        L_CONV_KERNEL_SIZE,  # l
+        B_TCN_CHANNELS,  # b
+        H_TCN_CHANNELS,  # h
+        P_TCN_KERNEL_SIZE,  # p
+        X_TCN_BLOCKS,  # x
+        R_TCN_REPEATS,  # r
+        N_SOURCES,  # c - Number of sources
+        Sc_TCN_CHANNELS,  # sc - Skip-connection channels
         NORM_TYPE,
         CAUSAL_CONV,
     ).to(device)

@@ -33,12 +33,12 @@ else:
 
 # --- Global Parameters ---
 MAX_TRAIN_FILES = None  # Use all available training files
-MAX_TEST_FILES = 20  # Keep a small test set for quick evaluation
+MAX_TEST_FILES = 5  # Keep a small test set for quick evaluation
 
 # Source Separation Parameters (for variable sources)
-MIN_SOURCES_TRAIN = 1  # Minimum number of sources in a training mixture
+MIN_SOURCES_TRAIN = 2  # Minimum number of sources in a training mixture
 MAX_SOURCES_TRAIN = 5  # Maximum number of sources in a training mixture (This sets N_SOURCES for the model)
-MIN_SOURCES_EVAL = 2  # Minimum number of sources in an evaluation mixture
+MIN_SOURCES_EVAL = 1  # Minimum number of sources in an evaluation mixture
 MAX_SOURCES_EVAL = 3  # Maximum number of sources in an evaluation mixture
 
 # N_SOURCES is the maximum number of sources the model is designed to output
@@ -156,7 +156,7 @@ X_TCN_BLOCKS = 8  # x: Number of convolutional blocks in each repeat (slightly r
 R_TCN_REPEATS = 2  # r: Number of repeats of x blocks (slightly reduced)
 Sc_TCN_CHANNELS = 128  # sc: Number of channels in skip-connection paths' 1x1-conv blocks. If <=0, skip-connections are not used. (reduced)
 NORM_TYPE = "gLN"  # Type of normalization (gLN, cLN, BN)
-CAUSAL_CONV = False  # Use causal convolutions in TCN blocks (False for potentially better performance)
+CAUSAL_CONV = True  # Use causal convolutions in TCN blocks (False for potentially better performance)
 
 # --- Training Parameters ---
 EPOCHS_TO_TRAIN = 5  # Keep for a short test run
