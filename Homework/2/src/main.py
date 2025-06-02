@@ -14,6 +14,7 @@ import numpy as np
 import os
 import json
 import datetime
+from collections import defaultdict
 
 from logger_config import (
     setup_main_logger,
@@ -73,55 +74,65 @@ BATCH_SIZE_EVAL = config.BATCH_SIZE_EVAL
 # --- Training ---
 def train(
     model,
-    audio_files_list,
+    audio_files_with_speakers_list,
     optimizer,
     device,
     epochs=config.EPOCHS_TO_TRAIN,
     batch_size=config.BATCH_SIZE_TRAIN,
-    min_sources=config.MIN_SOURCES_TRAIN,  # Use min/max from config
-    max_sources=config.MAX_SOURCES_TRAIN,  # Use min/max from config
+    min_sources=config.MIN_SOURCES_TRAIN,
+    max_sources=config.MAX_SOURCES_TRAIN,
     noise_level=config.NOISE_LEVEL_TRAIN,
     sample_rate=config.SAMPLE_RATE,
     duration_samples=config.DURATION_SAMPLES,
-    model_n_sources=config.N_SOURCES,  # Pass the model's expected output size
+    model_n_sources=config.N_SOURCES,
 ):
     model.train()
     all_epoch_losses = []
     all_epoch_train_si_snrs = []
 
-    for epoch in range(epochs):
-        # Need a way to sample files for variable source counts
-        # A simple approach: shuffle files and sample groups for each mixture
-        shuffled_files = audio_files_list[:]  # Copy to avoid modifying original list
-        random.shuffle(shuffled_files)
+    if not audio_files_with_speakers_list:
+        train_logger.warning("No audio files provided for training. Skipping training.")
+        return [], []
 
-        # Determine how many mixtures we can create in this epoch
-        # A rough estimate: total files // average number of sources
-        if (
-            min_sources == 0 and max_sources == 0
-        ):  # Avoid division by zero if no sources
-            avg_sources_per_mix = (
-                1  # Default to 1 to avoid error, though this case should be handled
-            )
-        elif (
-            min_sources == max_sources
-        ):  # Avoid division by zero if min_sources can be 0
-            avg_sources_per_mix = max(1, min_sources)  # Ensure it is at least 1
+    # Group files by speaker
+    speaker_to_files = defaultdict(list)
+    for filepath, speaker_id in audio_files_with_speakers_list:
+        speaker_to_files[speaker_id].append(filepath)
+
+    # Filter out speakers with no files (should not happen if input is correct)
+    speaker_to_files = {k: v for k, v in speaker_to_files.items() if v}
+
+    if not speaker_to_files:
+        train_logger.warning(
+            "No speakers found after grouping files. Skipping training."
+        )
+        return [], []
+
+    for epoch in range(epochs):
+        # Determine how many mixtures we can potentially create.
+        # This is a rough estimate for tqdm. The actual number might be less
+        # if we can't form enough unique speaker combinations.
+        # A simple estimate: total files / average sources per mix.
+        total_files = len(audio_files_with_speakers_list)
+        if min_sources == 0 and max_sources == 0:
+            avg_sources_per_mix = 1
+        elif min_sources == max_sources:
+            avg_sources_per_mix = max(1, min_sources)
         else:
             avg_sources_per_mix = (min_sources + max_sources) / 2
-            if avg_sources_per_mix == 0:  # Handle case where average is still zero
+            if avg_sources_per_mix == 0:
                 avg_sources_per_mix = 1
 
-        num_potential_mixtures = int(len(shuffled_files) / avg_sources_per_mix)
+        num_potential_mixtures = int(total_files / avg_sources_per_mix)
+
         if num_potential_mixtures == 0:
             train_logger.warning(
-                f"Epoch {epoch+1}: Not enough files to create any mixtures. Skipping epoch."
+                f"Epoch {epoch+1}: Not enough files/speakers to create any mixtures. Skipping epoch."
             )
-            all_epoch_losses.append(0)  # Append 0 loss if epoch is skipped
-            all_epoch_train_si_snrs.append(0)  # Append 0 SI-SNR if epoch is skipped
+            all_epoch_losses.append(0)
+            all_epoch_train_si_snrs.append(0)
             continue
 
-        # We will generate batches of mixtures dynamically
         num_batches_in_epoch = num_potential_mixtures // batch_size
         if num_batches_in_epoch == 0:
             train_logger.warning(
@@ -131,56 +142,53 @@ def train(
             all_epoch_train_si_snrs.append(0)
             continue
 
-        # Use an index to track files consumed
-        file_idx = 0
         total_epoch_loss = 0
         total_epoch_si_snr = 0
-        actual_batches_processed_in_epoch = 0  # Correctly count batches processed
+        actual_batches_processed_in_epoch = 0
 
         progress_bar = tqdm(range(num_batches_in_epoch), desc=f"Epoch {epoch+1}")
 
         for batch_idx in progress_bar:
             batch_mixtures_np_list = []
-            batch_original_sources_list = (
-                []
-            )  # Store lists of original sources for padding
-            samples_generated_for_batch = (
-                0  # Track samples successfully generated for this batch
-            )
+            batch_original_sources_list = []
+            samples_generated_for_batch = 0
 
-            for sample_in_batch_idx in range(batch_size):
-                # Randomly determine the number of sources for this mixture
-                if min_sources > max_sources:  # Safety check
-                    train_logger.warning(
-                        f"min_sources ({min_sources}) > max_sources ({max_sources}). Using max_sources."
-                    )
+            for _ in range(batch_size):  # Try to create `batch_size` mixtures
+                if min_sources > max_sources:
                     num_sources_for_this_mix = max_sources
                 elif min_sources == max_sources:
                     num_sources_for_this_mix = min_sources
                 else:
                     num_sources_for_this_mix = random.randint(min_sources, max_sources)
 
-                if num_sources_for_this_mix == 0:  # Skip if no sources are to be mixed
+                if num_sources_for_this_mix == 0:
                     continue
 
-                # Check if enough files are left
-                if file_idx + num_sources_for_this_mix > len(shuffled_files):
-                    # Not enough files for a full mixture, break or handle partial batch
-                    # For simplicity here, let's break the inner sample loop
-                    if (
-                        samples_generated_for_batch == 0
-                    ):  # If even the first sample can't be created
-                        # This condition might lead to premature end of epoch if not enough files for *any* batch
-                        pass  # Let the outer loop handle epoch termination if num_batches_in_epoch was 0
-                    break  # Break the inner sample loop and process what we have
+                # Select unique speakers for this mixture
+                available_speaker_ids = list(speaker_to_files.keys())
+                if len(available_speaker_ids) < num_sources_for_this_mix:
+                    # Not enough unique speakers available to form this mixture
+                    # train_logger.debug(f"Not enough unique speakers ({len(available_speaker_ids)}) for {num_sources_for_this_mix} sources.")
+                    break  # Stop trying to add more samples to this batch
 
-                # Select files for this mixture
-                files_for_this_mix = shuffled_files[
-                    file_idx : file_idx + num_sources_for_this_mix
-                ]
-                file_idx += num_sources_for_this_mix  # Advance the file index
+                selected_speaker_ids = random.sample(
+                    available_speaker_ids, num_sources_for_this_mix
+                )
 
-                # Load sources
+                files_for_this_mix = []
+                valid_selection = True
+                for spk_id in selected_speaker_ids:
+                    if not speaker_to_files[
+                        spk_id
+                    ]:  # Should not happen if speaker_to_files is maintained
+                        valid_selection = False
+                        break
+                    files_for_this_mix.append(random.choice(speaker_to_files[spk_id]))
+
+                if not valid_selection:
+                    # train_logger.debug("Failed to select files for chosen speakers.")
+                    continue  # Try to form the next sample in batch if this one failed
+
                 current_sources_np_list = []
                 loading_error = False
                 for file_path in files_for_this_mix:
@@ -189,7 +197,7 @@ def train(
                     )
                     if source_np is None:
                         train_logger.debug(
-                            f"Skipping mixture due to loading error: {files_for_this_mix}"
+                            f"Skipping mixture due to loading error for one of: {files_for_this_mix}"
                         )
                         loading_error = True
                         break
@@ -199,9 +207,8 @@ def train(
                     loading_error
                     or len(current_sources_np_list) != num_sources_for_this_mix
                 ):
-                    continue  # Skip this mixture if loading failed
+                    continue
 
-                # Create mixture
                 (
                     mixture_np,
                     original_sources_this_mix,
@@ -212,16 +219,32 @@ def train(
                     target_snr_db=None,
                     training_noise_level=noise_level,
                 )
-                if (
-                    mixture_np.size == 0
-                ):  # Skip if mixture is empty (e.g. all sources were empty)
+                if mixture_np.size == 0:
                     continue
 
                 batch_mixtures_np_list.append(mixture_np)
-                batch_original_sources_list.append(
-                    original_sources_this_mix
-                )  # Store the list
+                batch_original_sources_list.append(original_sources_this_mix)
                 samples_generated_for_batch += 1
+
+            if (
+                samples_generated_for_batch == 0 and batch_idx > 0
+            ):  # If a batch (not the first) is empty, maybe we ran out of speaker combos
+                progress_bar.set_description(
+                    f"Epoch {epoch+1} (No more unique speaker sets for full batch)"
+                )
+                break  # End epoch early if we can't form new batches
+
+            if not batch_mixtures_np_list:
+                if (
+                    samples_generated_for_batch == 0 and batch_idx == 0
+                ):  # First batch is empty
+                    train_logger.warning(
+                        f"Epoch {epoch+1}: Could not form any mixtures in the first batch attempt. Check speaker/file availability."
+                    )
+                # If batch is empty, skip processing for this iteration of progress_bar
+                # This might happen if `num_batches_in_epoch` was an overestimate
+                # and we ran out of unique speaker combinations.
+                continue
 
             # --- Process the batch ---
             if not batch_mixtures_np_list:
@@ -331,7 +354,7 @@ def train(
 
             total_epoch_loss += loss_val.item()
             total_epoch_si_snr += si_snr_val.item()
-            actual_batches_processed_in_epoch += 1  # Increment for each batch processed
+            actual_batches_processed_in_epoch += 1
             progress_bar.set_postfix(
                 {"Loss": f"{loss_val.item():.4f}", "SI-SNR": f"{si_snr_val.item():.2f}"}
             )
@@ -359,10 +382,10 @@ def train(
 # --- Evaluation ---
 def evaluate(
     model,
-    current_test_files,
+    current_test_files_with_speakers,
     device,
-    min_sources=config.MIN_SOURCES_EVAL,  # Use min/max from config
-    max_sources=config.MAX_SOURCES_EVAL,  # Use min/max from config
+    min_sources=config.MIN_SOURCES_EVAL,
+    max_sources=config.MAX_SOURCES_EVAL,
     batch_size=config.BATCH_SIZE_EVAL,
     target_snr_db=None,
     sample_rate=config.SAMPLE_RATE,
@@ -371,18 +394,29 @@ def evaluate(
     num_samples_to_save=0,
     output_dir_base=config.OUTPUT_AUDIO_DIR_BASE,
     condition_name="eval",
-    model_n_sources=config.N_SOURCES,  # Pass the model's expected output size
+    model_n_sources=config.N_SOURCES,
 ):
     model.eval()
     total_si_snr_val = 0
-    num_mixtures_processed = 0  # Count individual mixtures, not batches
+    num_mixtures_processed = 0
     saved_sample_count = 0
 
-    # Similar dynamic batching approach as training
-    shuffled_test_files = current_test_files[:]
-    random.shuffle(shuffled_test_files)
+    if not current_test_files_with_speakers:
+        eval_logger.error("No test files provided for evaluation.")
+        return 0
 
-    # Estimate number of mixtures
+    speaker_to_files_test = defaultdict(list)
+    for filepath, speaker_id in current_test_files_with_speakers:
+        speaker_to_files_test[speaker_id].append(filepath)
+
+    speaker_to_files_test = {k: v for k, v in speaker_to_files_test.items() if v}
+
+    if not speaker_to_files_test:
+        eval_logger.error("No speakers found after grouping test files.")
+        return 0
+
+    # Estimate number of mixtures for tqdm
+    total_test_files = len(current_test_files_with_speakers)
     if min_sources == 0 and max_sources == 0:
         avg_sources_per_mix = 1
     elif min_sources == max_sources:
@@ -392,40 +426,36 @@ def evaluate(
         if avg_sources_per_mix == 0:
             avg_sources_per_mix = 1
 
-    num_potential_mixtures = int(len(shuffled_test_files) / avg_sources_per_mix)
+    num_potential_mixtures = int(total_test_files / avg_sources_per_mix)
     if num_potential_mixtures == 0:
         eval_logger.error(
-            "Not enough test files to create any mixtures for evaluation."
+            "Not enough test files/speakers to create any mixtures for evaluation."
         )
         return 0
 
-    file_idx = 0
-    # batch_count = 0 # Not strictly needed if progress is by sample
+    # We will iterate until we can't form more batches or meet num_potential_mixtures
+    # The progress bar will be based on num_potential_mixtures, but actual processing might be less.
 
     with torch.no_grad():
-        # Progress bar based on estimated number of mixtures
         progress_bar = tqdm(
             total=num_potential_mixtures,
             desc=f"Evaluating (SNR: {target_snr_db if target_snr_db is not None else 'Clean'})",
         )
 
-        while (
-            file_idx < len(shuffled_test_files)
-            and num_mixtures_processed < num_potential_mixtures
-        ):
+        mixtures_created_this_run = 0
+        # Loop to create batches until we run out of options or hit a target
+        while mixtures_created_this_run < num_potential_mixtures:
             batch_mixtures_np_list = []
-            batch_original_sources_list = []  # Store lists of original sources
-            batch_added_noise_np_list = []  # Store noise for saving
+            batch_original_sources_list = []
+            batch_added_noise_np_list = []
             samples_generated_for_batch = 0
 
-            # Generate samples for the current batch
-            # Try to fill the batch, but stop if not enough files or potential mixtures reached
-            while (
-                samples_generated_for_batch < batch_size
-                and file_idx < len(shuffled_test_files)
-                and num_mixtures_processed + samples_generated_for_batch
-                < num_potential_mixtures
-            ):
+            for _ in range(batch_size):  # Try to fill a batch
+                if (
+                    mixtures_created_this_run + samples_generated_for_batch
+                    >= num_potential_mixtures
+                ):
+                    break  # Reached estimated total
 
                 if min_sources > max_sources:
                     num_sources_for_this_mix = max_sources
@@ -437,17 +467,28 @@ def evaluate(
                 if num_sources_for_this_mix == 0:
                     continue
 
-                # Check if enough files are left for this *single* mixture
-                if file_idx + num_sources_for_this_mix > len(shuffled_test_files):
-                    break  # Not enough files for even one more full mixture
+                available_speaker_ids_test = list(speaker_to_files_test.keys())
+                if len(available_speaker_ids_test) < num_sources_for_this_mix:
+                    # Not enough unique speakers for this mixture
+                    break  # Stop trying to add to this batch
 
-                # Select files for this mixture
-                files_for_this_mix = shuffled_test_files[
-                    file_idx : file_idx + num_sources_for_this_mix
-                ]
-                # file_idx is advanced *after* successful mixture creation to avoid skipping files on error
+                selected_speaker_ids_test = random.sample(
+                    available_speaker_ids_test, num_sources_for_this_mix
+                )
 
-                # Load sources
+                files_for_this_mix = []
+                valid_selection = True
+                for spk_id in selected_speaker_ids_test:
+                    if not speaker_to_files_test[spk_id]:
+                        valid_selection = False
+                        break
+                    files_for_this_mix.append(
+                        random.choice(speaker_to_files_test[spk_id])
+                    )
+
+                if not valid_selection:
+                    continue
+
                 current_sources_np_list = []
                 loading_error = False
                 for file_path in files_for_this_mix:
@@ -456,19 +497,15 @@ def evaluate(
                     )
                     if source_np is None:
                         loading_error = True
-                        file_idx += num_sources_for_this_mix  # Consume files even on error to avoid infinite loop on bad files
-                        break  # Break from loading sources for this mixture
+                        break
                     current_sources_np_list.append(source_np)
 
                 if (
                     loading_error
                     or len(current_sources_np_list) != num_sources_for_this_mix
                 ):
-                    if not loading_error:  # If not a loading error, still consume files
-                        file_idx += num_sources_for_this_mix
-                    continue  # Skip this mixture
+                    continue
 
-                # Create mixture
                 (
                     mixture_np,
                     original_sources_this_mix,
@@ -477,30 +514,22 @@ def evaluate(
                     current_sources_np_list,
                     noise_profile=None,
                     target_snr_db=target_snr_db,
-                    training_noise_level=0,  # No extra training noise in eval
+                    training_noise_level=0,
                 )
                 if mixture_np.size == 0:
-                    file_idx += num_sources_for_this_mix  # Consume files
                     continue
 
                 batch_mixtures_np_list.append(mixture_np)
                 batch_original_sources_list.append(original_sources_this_mix)
                 batch_added_noise_np_list.append(noise_added_np)
                 samples_generated_for_batch += 1
-                file_idx += num_sources_for_this_mix  # Advance file index *after* successful processing
+
+            if (
+                not batch_mixtures_np_list
+            ):  # If batch is empty, we probably ran out of unique speaker combos
+                break  # End evaluation loop
 
             # --- Process the batch ---
-            if not batch_mixtures_np_list:
-                # This might happen if the remaining files are not enough for any mixture
-                # or if all remaining potential mixtures were skipped due to errors.
-                if (
-                    file_idx >= len(shuffled_test_files)
-                    or num_mixtures_processed >= num_potential_mixtures
-                ):
-                    break  # End evaluation if no more files or potential mixtures
-                else:
-                    continue  # Try to form the next batch
-
             # Convert mixture list to tensor
             mixtures_tensor = (
                 torch.tensor(np.array(batch_mixtures_np_list), dtype=torch.float32)
@@ -556,9 +585,14 @@ def evaluate(
                         "batch_sources_tensor_list is empty in eval. Skipping batch."
                     )
                     progress_bar.update(
-                        len(batch_mixtures_np_list)
-                    )  # Still update progress for skipped items
-                    num_mixtures_processed += len(batch_mixtures_np_list)
+                        len(batch_mixtures_np_list) if batch_mixtures_np_list else 0
+                    )
+                    mixtures_created_this_run += (
+                        len(batch_mixtures_np_list) if batch_mixtures_np_list else 0
+                    )
+                    num_mixtures_processed += (
+                        len(batch_mixtures_np_list) if batch_mixtures_np_list else 0
+                    )  # Ensure this is updated
                     continue
             else:
                 sources_tensor = torch.stack(batch_sources_tensor_list, dim=1).to(
@@ -573,21 +607,15 @@ def evaluate(
             _, si_snr_val_batch = si_snr_loss(
                 estimated_sources_tensor,
                 sources_tensor,
-                n_sources=model_n_sources,  # Use the model's N_SOURCES
+                n_sources=model_n_sources,
                 pit=True,
                 reduction="none",  # Get SI-SNR for each item in batch
             )
             # total_si_snr_val += si_snr_val_batch.item() * len(batch_mixtures_np_list) # Accumulate sum of SI-SNR for each sample
-            total_si_snr_val += torch.sum(
-                si_snr_val_batch
-            ).item()  # Sum SI-SNR values for the batch
-            num_mixtures_processed += len(
-                batch_mixtures_np_list
-            )  # Count total samples processed
-            # batch_count += 1 # Count batches processed
-            progress_bar.update(
-                len(batch_mixtures_np_list)
-            )  # Update progress bar by number of samples processed
+            total_si_snr_val += torch.sum(si_snr_val_batch).item()
+            num_mixtures_processed += len(batch_mixtures_np_list)
+            progress_bar.update(len(batch_mixtures_np_list))
+            mixtures_created_this_run += len(batch_mixtures_np_list)
 
             # --- Saving audio samples during evaluation ---
             if save_audio_flag and saved_sample_count < num_samples_to_save:
@@ -620,7 +648,7 @@ def evaluate(
                     else:
                         break  # Reached num_samples_to_save for saving
 
-        progress_bar.close()  # Close progress bar after the loop
+        progress_bar.close()
 
     avg_si_snr = (
         total_si_snr_val / num_mixtures_processed if num_mixtures_processed > 0 else 0
@@ -686,14 +714,14 @@ def main_run():
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
     # --- Data Loading ---
-    train_filepaths = utils.load_audio_filepaths(
+    train_filepaths_with_speakers = utils.load_audio_filepaths(
         config.TRAIN_LIBRISPEECH_DIR, max_files=MAX_TRAIN_FILES
     )
-    test_filepaths = utils.load_audio_filepaths(
+    test_filepaths_with_speakers = utils.load_audio_filepaths(
         config.TEST_LIBRISPEECH_DIR, max_files=MAX_TEST_FILES
     )
     logger.info(
-        f"Found {len(train_filepaths)} training files and {len(test_filepaths)} test files."
+        f"Found {len(train_filepaths_with_speakers)} training files and {len(test_filepaths_with_speakers)} test files (with speaker IDs)."
     )
 
     # --- User choice for training or evaluation ---
@@ -732,21 +760,19 @@ def main_run():
 
     # --- Training Phase ---
     if perform_training:
-        if not train_filepaths:
+        if not train_filepaths_with_speakers:  # Check updated variable
             logger.warning("No training files found. Skipping training.")
         else:
             logger.info("--- Starting Training ---")
-            training_losses, training_si_snrs = (
-                train(  # train() returns lists of per-epoch values
-                    model,
-                    train_filepaths,
-                    optimizer,
-                    device,
-                    epochs=EPOCHS_TO_TRAIN,
-                    batch_size=BATCH_SIZE_TRAIN,
-                    noise_level=NOISE_LEVEL_TRAIN,
-                    model_n_sources=N_SOURCES,
-                )
+            training_losses, training_si_snrs = train(
+                model,
+                train_filepaths_with_speakers,
+                optimizer,
+                device,
+                epochs=EPOCHS_TO_TRAIN,
+                batch_size=BATCH_SIZE_TRAIN,
+                noise_level=NOISE_LEVEL_TRAIN,
+                model_n_sources=N_SOURCES,
             )
             logger.info("Training finished.")
             if not os.path.exists(MODEL_DIR):
@@ -771,7 +797,7 @@ def main_run():
 
     # --- Evaluation Phase ---
     if perform_evaluation:
-        if not test_filepaths:
+        if not test_filepaths_with_speakers:
             logger.warning("No test files found. Skipping evaluation.")
         elif not model_ready_for_eval and not os.path.exists(
             MODEL_PATH
@@ -804,7 +830,7 @@ def main_run():
                 logger.info("Evaluating on clean test set (or baseline conditions).")
                 avg_si_snr_clean = evaluate(
                     model,
-                    test_filepaths,
+                    test_filepaths_with_speakers,
                     device,
                     batch_size=BATCH_SIZE_EVAL,
                     target_snr_db=None,
@@ -825,7 +851,7 @@ def main_run():
                     logger.info(f"Evaluating with target SNR: {snr_db} dB")
                     avg_si_snr_noisy = evaluate(
                         model,
-                        test_filepaths,
+                        test_filepaths_with_speakers,
                         device,
                         batch_size=BATCH_SIZE_EVAL,
                         target_snr_db=snr_db,

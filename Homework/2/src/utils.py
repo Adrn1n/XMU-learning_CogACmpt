@@ -21,41 +21,76 @@ import config
 logger = setup_data_logger()
 
 
+def _get_speaker_id_from_path(file_path, base_dir):
+    """
+    Extracts speaker ID from a file path, assuming LibriSpeech-like structure.
+    e.g., base_dir = ".../train-clean-100"
+          file_path = ".../train-clean-100/19/198/19-198-0000.flac"
+          speaker_id = "19"
+    """
+    try:
+        relative_path = os.path.relpath(file_path, base_dir)
+        # The speaker ID is the first component of the relative path
+        speaker_id = relative_path.split(os.sep)[0]
+        return speaker_id
+    except ValueError:
+        # This can happen if file_path is not under base_dir, or other path issues.
+        # Fallback or log warning. For simplicity, return a generic unknown speaker.
+        logger.warning(
+            f"Could not determine speaker ID for {file_path} relative to {base_dir}. Using 'unknown_speaker'."
+        )
+        return "unknown_speaker"
+
+
 def load_audio_filepaths(audio_dir, max_files=None):
     """
-    Load all .flac and .wav file paths from a directory and its subdirectories.
+    Load all .flac and .wav file paths from a directory and its subdirectories,
+    along with their speaker IDs.
 
     Args:
-        audio_dir (str): Directory to search for audio files
+        audio_dir (str): Directory to search for audio files (e.g., ".../train-clean-100")
         max_files (int, optional): Maximum number of files to return
 
     Returns:
-        list: List of file paths found
+        list: List of (filepath, speaker_id) tuples found
     """
-    filepaths = []
-    logger.info(f"Loading audio files from directory: {audio_dir}")
+    filepaths_with_speakers = []
+    logger.info(f"Loading audio files and speaker IDs from directory: {audio_dir}")
 
     if not os.path.isdir(audio_dir):
         logger.error(f"Path is not a directory or does not exist: {audio_dir}")
-        return filepaths
+        return filepaths_with_speakers
 
-    for root, dirnames, filenames in os.walk(audio_dir):
+    temp_filepaths = []
+    for root, _, filenames in os.walk(audio_dir):
         for file in filenames:
             if file.endswith(".flac") or file.endswith(".wav"):
-                filepaths.append(os.path.join(root, file))
+                full_path = os.path.join(root, file)
+                temp_filepaths.append(full_path)
 
-    logger.info(f"Found {len(filepaths)} audio files in {audio_dir}")
+    # Sort for deterministic behavior if max_files is used, though shuffling happens later.
+    temp_filepaths.sort()
+
+    for file_path in temp_filepaths:
+        speaker_id = _get_speaker_id_from_path(file_path, audio_dir)
+        filepaths_with_speakers.append((file_path, speaker_id))
+
+    logger.info(
+        f"Found {len(filepaths_with_speakers)} audio files with speaker IDs in {audio_dir}"
+    )
 
     if max_files is not None:
         if max_files == 0:
-            filepaths = []
+            filepaths_with_speakers = []
             logger.info("max_files set to 0, returning empty list")
-        elif len(filepaths) > max_files:
+        elif len(filepaths_with_speakers) > max_files:
             if isinstance(max_files, int) and max_files > 0:
-                filepaths = sorted(filepaths)[:max_files]
+                # Shuffling before truncating might be better for speaker diversity with max_files
+                # random.shuffle(filepaths_with_speakers) # Decided against shuffling here to keep it deterministic before training shuffle
+                filepaths_with_speakers = filepaths_with_speakers[:max_files]
                 logger.info(f"Limited to {max_files} files for processing")
 
-    return filepaths
+    return filepaths_with_speakers
 
 
 def load_audio_segment(
