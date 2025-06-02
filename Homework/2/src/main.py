@@ -885,8 +885,9 @@ def main_run():
                     condition_name=condition_name,
                     model_n_sources=N_SOURCES,
                 )
+                # Store metrics for this SNR condition
                 if (
-                    current_evaluation_run_metrics
+                    isinstance(current_evaluation_run_metrics, dict)
                     and "average_si_snr" in current_evaluation_run_metrics
                 ):
                     final_si_snrs_per_condition[condition_name] = (
