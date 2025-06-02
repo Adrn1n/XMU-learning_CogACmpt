@@ -57,11 +57,12 @@ def setup_logger(
     # Create formatters
     detailed_formatter = logging.Formatter(
         fmt="%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s",
-        datefmt="%Y-%m-%d %h:%M:%S",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
 
     console_formatter = logging.Formatter(
-        fmt="%(asctime)s - %(levelname)s - %(message)s", datefmt="%h:%M:%S"
+        fmt="%(asctime)s - %(levelname)s - %(message)s",
+        datefmt="%H:%M:%S",
     )
 
     # Console handler

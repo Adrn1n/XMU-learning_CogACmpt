@@ -629,42 +629,34 @@ def evaluate(
 
 # --- Main Execution ---
 def main_run():
-    """Main execution function for training and evaluation."""
-    global logger, train_logger, eval_logger
+    global logger, train_logger, eval_logger  # Ensure global loggers are used
+
+    # Initialize loggers
     logger = setup_main_logger()
     train_logger = setup_training_logger()
     eval_logger = setup_evaluation_logger()
 
-    # Initial CUDA diagnostics
-    logger.info("--- CUDA Diagnostics ---")
-    try:
-        logger.info(f"torch.version.cuda: {torch.version.cuda}")
-        logger.info(f"torch.cuda.is_available() pre-check: {torch.cuda.is_available()}")
-        if torch.cuda.is_available():
-            logger.info(f"torch.cuda.device_count(): {torch.cuda.device_count()}")
-            logger.info(f"torch.cuda.current_device(): {torch.cuda.current_device()}")
-            logger.info(
-                f"torch.cuda.get_device_name(0): {torch.cuda.get_device_name(0)}"
-            )
-        else:
-            logger.warning("CUDA not available according to pre-check.")
-        cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
-        logger.info(
-            f"CUDA_VISIBLE_DEVICES: {cuda_visible_devices if cuda_visible_devices else 'Not set'}"
-        )
-    except Exception as e:
-        logger.error(f"Error during CUDA pre-check: {e}")
-    logger.info("--- End CUDA Diagnostics ---")
+    logger.info("Starting Conv-TasNet main script.")
 
-    logger.info("Starting Conv-TasNet training and evaluation")
-
-    # Determine device
-    if torch.backends.mps.is_available():
-        device = torch.device("mps")
-    elif torch.cuda.is_available():
-        device = torch.device("cuda")
+    # --- User choice for training or evaluation ---
+    if os.path.exists(MODEL_PATH):
+        choice = input(
+            "Model already exists. Do you want to (t)rain again, (e)valuate, or (q)uit? [t/e/q]: "
+        ).lower()
+        if choice == "q":
+            logger.info("Quitting.")
+            return
+        elif choice == "e":
+            skip_training = True
+            logger.info("Skipping training and proceeding to evaluation.")
+        else:  # Default to training if 't' or anything else
+            skip_training = False
+            logger.info("Proceeding with training.")
     else:
-        device = torch.device("cpu")
+        skip_training = False
+        logger.info("No existing model found. Proceeding with training.")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
 
     # Data directories from config
@@ -742,33 +734,49 @@ def main_run():
     # training_losses = # These are returned by train function
     # training_si_snrs = []
 
-    if epochs_to_train > 0:
-        logger.info("Starting training...")
-        training_losses, training_si_snrs = train(
-            model,
-            train_filepaths,
-            optimizer,
-            device=device,
-            epochs=epochs_to_train,
-            batch_size=config.BATCH_SIZE_TRAIN,
-            min_sources=config.MIN_SOURCES_TRAIN,  # Pass min/max
-            max_sources=config.MAX_SOURCES_TRAIN,  # Pass min/max
-            noise_level=config.NOISE_LEVEL_TRAIN,
-            sample_rate=config.SAMPLE_RATE,
-            duration_samples=config.DURATION_SAMPLES,
-            model_n_sources=config.N_SOURCES,  # Pass model's N_SOURCES
-        )
-        # Save model after training
-        if not os.path.exists(config.MODEL_DIR):
-            os.makedirs(config.MODEL_DIR)
-        torch.save(model.state_dict(), config.MODEL_PATH)
-        logger.info(f"Model saved to {config.MODEL_PATH}")
+    if not skip_training:
+        train_logger.info("Starting training process...")
+        if epochs_to_train > 0:
+            logger.info("Starting training...")
+            training_losses, training_si_snrs = train(
+                model,
+                train_filepaths,
+                optimizer,
+                device=device,
+                epochs=epochs_to_train,
+                batch_size=config.BATCH_SIZE_TRAIN,
+                min_sources=config.MIN_SOURCES_TRAIN,  # Pass min/max
+                max_sources=config.MAX_SOURCES_TRAIN,  # Pass min/max
+                noise_level=config.NOISE_LEVEL_TRAIN,
+                sample_rate=config.SAMPLE_RATE,
+                duration_samples=config.DURATION_SAMPLES,
+                model_n_sources=config.N_SOURCES,  # Pass model's N_SOURCES
+            )
+            # Save model after training
+            if not os.path.exists(config.MODEL_DIR):
+                os.makedirs(config.MODEL_DIR)
+            torch.save(model.state_dict(), config.MODEL_PATH)
+            logger.info(f"Model saved to {config.MODEL_PATH}")
+        else:
+            logger.info("Skipping training as epochs_to_train is 0.")
+            # If not training, initialize with empty lists or load previous if available
+            training_losses = []
+            training_si_snrs = []
     else:
-        logger.info("Skipping training as epochs_to_train is 0.")
-        # If not training, initialize with empty lists or load previous if available
-        training_losses = []
-        training_si_snrs = []
+        logger.info("Skipping training as per user choice or existing model.")
+        # Load existing metrics if available to continue evaluation or visualization
+        if os.path.exists(METRICS_FILE_PATH):
+            with open(METRICS_FILE_PATH, "r") as f:
+                metrics = json.load(f)
+            logger.info(f"Loaded existing metrics from {METRICS_FILE_PATH}")
+        else:
+            logger.warning(
+                f"No metrics file found at {METRICS_FILE_PATH}. Evaluation might be limited."
+            )
+            metrics = {}  # Initialize empty metrics if none exist
 
+    # --- Evaluation Phase ---
+    eval_logger.info("Starting evaluation process...")
     logger.info("\n--- Starting SNR-based Evaluation ---")
     evaluation_final_si_snrs = {}
 
